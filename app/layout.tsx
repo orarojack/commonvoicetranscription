@@ -9,8 +9,8 @@ import Script from "next/script"
 const inter = Inter({ subsets: ["latin"] })
 
 export const metadata: Metadata = {
-  title: "Common Voice Luo",
-  description: "Voice contribution and validation platform for Luo language - Mozilla Common Voice",
+  title: "Africa Next Voices",
+  description: "Voice contribution and validation platform for African languages",
   generator: 'v0.dev',
   icons: {
     icon: [

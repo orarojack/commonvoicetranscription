@@ -147,15 +147,31 @@ class SupabaseDatabase {
         .eq("role", role)
         .single()
 
-      if (error && error.code !== "PGRST116") {
+      if (error) {
+        // PGRST116 = no rows returned (not an error, just no match)
+        if (error.code === "PGRST116") {
+          return null
+        }
+        
+        // Check if table doesn't exist (common error codes)
+        if (error.code === "42P01" || error.message?.includes("does not exist") || error.message?.includes("relation") || error.message?.includes("table")) {
+          console.error("❌ Database schema not set up! The 'users' table does not exist.")
+          console.error("📋 Please run the database setup script:")
+          console.error("   1. Go to your Supabase Dashboard → SQL Editor")
+          console.error("   2. Run the SQL from: scripts/001_create_tables.sql")
+          console.error("   3. Then run: scripts/010_allow_role_based_email_uniqueness.sql")
+          console.error("   Or use: complete_database_setup.sql for complete setup")
+          throw new Error("Database schema not initialized. Please run the database setup scripts first.")
+        }
+        
         console.error("Database error getting user by email and role:", error)
-        throw new Error(`Failed to get user: ${error.message}`)
+        throw new Error(`Failed to get user: ${error.message || JSON.stringify(error)}`)
       }
 
       return data || null
     } catch (error) {
       console.error("Error in getUserByEmailAndRole:", error)
-      if (error instanceof Error && error.message.includes("Failed to get user")) {
+      if (error instanceof Error && (error.message.includes("Failed to get user") || error.message.includes("Database schema not initialized"))) {
         throw error
       }
       return null
@@ -633,23 +649,14 @@ class SupabaseDatabase {
 
   async getRecordingsByStatus(status: Recording["status"], options?: { limit?: number }): Promise<Recording[]> {
     try {
-      // OPTIMIZED: Use pending_recordings view for pending status (simpler, faster)
-      const tableName = status === "pending" ? "pending_recordings" : "recordings"
-      const needsStatusFilter = status !== "pending"
-
       // If limit is specified, use it directly (for performance when only need a few records)
       if (options?.limit) {
-        let query = supabase
-          .from(tableName)
+        const { data, error } = await supabase
+          .from("recordings")
           .select("*")
+          .eq("status", status)
           .order("created_at", { ascending: false })
           .limit(options.limit)
-
-        if (needsStatusFilter) {
-          query = query.eq("status", status)
-        }
-
-        const { data, error } = await query
 
         if (error) {
           console.error("Database error getting recordings by status:", error)
@@ -660,24 +667,19 @@ class SupabaseDatabase {
       }
 
       // FIXED: Use pagination to fetch ALL recordings by status (not limited to 1000 rows)
-      console.log(`🔄 Fetching all ${status} recordings with pagination${status === "pending" ? " (using view)" : ""}...`)
+      console.log(`🔄 Fetching all ${status} recordings with pagination...`)
       let allRecordings: Recording[] = []
       let page = 0
       const pageSize = 1000
       let hasMore = true
 
       while (hasMore) {
-        let query = supabase
-          .from(tableName)
+        const { data: recordingsBatch, error: batchError } = await supabase
+          .from("recordings")
           .select("*")
+          .eq("status", status)
           .order("created_at", { ascending: false })
           .range(page * pageSize, (page + 1) * pageSize - 1)
-
-        if (needsStatusFilter) {
-          query = query.eq("status", status)
-        }
-
-        const { data: recordingsBatch, error: batchError } = await query
 
         if (batchError) {
           console.error("Database error getting recordings by status batch:", batchError)
@@ -767,23 +769,14 @@ class SupabaseDatabase {
         return await this.getRecordingsByStatus(status, options)
       }
 
-      // OPTIMIZED: Use pending_recordings view for pending status (simpler, faster)
-      const tableName = status === "pending" ? "pending_recordings" : "recordings"
-      const needsStatusFilter = status !== "pending"
-
       // If limit is specified, use optimized path
       if (options?.limit) {
-        let query = supabase
-          .from(tableName)
+        const { data: allRecordings, error } = await supabase
+          .from("recordings")
           .select("*")
+          .eq("status", status)
           .order("created_at", { ascending: false })
           .limit(options.limit * 3) // Fetch 3x to account for filtering
-
-        if (needsStatusFilter) {
-          query = query.eq("status", status)
-        }
-
-        const { data: allRecordings, error } = await query
 
         if (error) {
           console.error("Database error getting recordings by status:", error)
@@ -837,17 +830,12 @@ class SupabaseDatabase {
       const usersMap = new Map<string, User | null>()
 
       while (hasMore) {
-        let query = supabase
-          .from(tableName)
+        const { data: recordingsBatch, error: batchError } = await supabase
+          .from("recordings")
           .select("*")
+          .eq("status", status)
           .order("created_at", { ascending: false })
           .range(page * pageSize, (page + 1) * pageSize - 1)
-
-        if (needsStatusFilter) {
-          query = query.eq("status", status)
-        }
-
-        const { data: recordingsBatch, error: batchError } = await query
 
         if (batchError) {
           console.error("Database error getting recordings by status batch:", batchError)
@@ -1290,59 +1278,60 @@ class SupabaseDatabase {
         .from("recordings")
         .select("*", { count: "exact", head: true })
       
-      // OPTIMIZED: Use pending_recordings view for faster count
+      // Count pending recordings
       const { count: pendingRecordings, error: pendingRecordingsError } = await supabase
-        .from("pending_recordings")
+        .from("recordings")
         .select("*", { count: "exact", head: true })
+        .eq("status", "pending")
       
-      const { count: approvedRecordings, error: approvedRecordingsError } = await supabase
+      const { count: validatedRecordings, error: validatedRecordingsError } = await supabase
         .from("recordings")
         .select("*", { count: "exact", head: true })
         .eq("status", "approved")
       
-      const { count: rejectedRecordings, error: rejectedRecordingsError } = await supabase
+      // Count edited transcriptions (recordings where transcription_edited = true)
+      const { count: editedRecordings, error: editedRecordingsError } = await supabase
         .from("recordings")
         .select("*", { count: "exact", head: true })
-        .eq("status", "rejected")
+        .eq("transcription_edited", true)
 
-      // Check for count errors (removed totalReviewsError since we calculate it now)
+      // Check for count errors
       if (totalUsersError || contributorsError || reviewersError || pendingReviewersError || 
           activeUsersError || totalRecordingsError || pendingRecordingsError || 
-          approvedRecordingsError || rejectedRecordingsError) {
+          validatedRecordingsError || editedRecordingsError) {
         console.error("Database count errors:", { 
           totalUsersError, contributorsError, reviewersError, pendingReviewersError,
           activeUsersError, totalRecordingsError, pendingRecordingsError,
-          approvedRecordingsError, rejectedRecordingsError
+          validatedRecordingsError, editedRecordingsError
         })
         throw new Error("Failed to get system stats counts")
       }
 
-      // FIXED: Count actual reviews from reviews table for accuracy
-      // This gives us the actual number of review records (which may include duplicates)
-      const { count: totalReviewRecords, error: totalReviewRecordsError } = await supabase
+      // Count actual validations from reviews table
+      const { count: totalValidations, error: totalValidationsError } = await supabase
         .from("reviews")
         .select("*", { count: "exact", head: true })
       
-      // Calculate unique recordings reviewed (should match approved + rejected if no duplicates)
-      const uniqueRecordingsReviewed = (approvedRecordings || 0) + (rejectedRecordings || 0)
+      // All validations result in approval (no rejection)
+      const uniqueRecordingsValidated = (validatedRecordings || 0)
       
-      let totalReviews: number
-      if (totalReviewRecordsError) {
-        console.error("Error counting reviews:", totalReviewRecordsError)
+      let totalValidationsCount: number
+      if (totalValidationsError) {
+        console.error("Error counting validations:", totalValidationsError)
         // Fallback to calculation if count fails
-        totalReviews = uniqueRecordingsReviewed
-        console.warn("Using fallback calculation for totalReviews:", totalReviews)
+        totalValidationsCount = uniqueRecordingsValidated
+        console.warn("Using fallback calculation for totalValidations:", totalValidationsCount)
       } else {
         // Use actual count from reviews table
-        totalReviews = totalReviewRecords || 0
+        totalValidationsCount = totalValidations || 0
         
-        // Log discrepancy if found (indicates duplicates)
-        if (totalReviews !== uniqueRecordingsReviewed) {
-          console.warn(`⚠️ Review count discrepancy detected:`)
-          console.warn(`   Total review records: ${totalReviews}`)
-          console.warn(`   Unique recordings reviewed: ${uniqueRecordingsReviewed}`)
-          console.warn(`   Difference (duplicates): ${totalReviews - uniqueRecordingsReviewed}`)
-          console.warn(`   This indicates duplicate reviews exist in the database.`)
+        // Log discrepancy if found (indicates duplicate validations)
+        if (totalValidationsCount !== uniqueRecordingsValidated) {
+          console.warn(`⚠️ Validation count discrepancy detected:`)
+          console.warn(`   Total validation records: ${totalValidationsCount}`)
+          console.warn(`   Unique recordings validated: ${uniqueRecordingsValidated}`)
+          console.warn(`   Difference (duplicates): ${totalValidationsCount - uniqueRecordingsValidated}`)
+          console.warn(`   This indicates duplicate validations exist in the database.`)
           console.warn(`   Run the cleanup script to remove duplicates.`)
         }
       }
@@ -1408,17 +1397,11 @@ class SupabaseDatabase {
       const totalRecordingTime = durations.reduce((sum, d) => sum + d, 0)
       const averageRecordingDuration = durations.length > 0 ? totalRecordingTime / durations.length : 0
       
-      // Calculate total time for approved recordings only
-      const approvedDurations = allRecordings
+      // Calculate total time for validated recordings only
+      const validatedDurations = allRecordings
         .filter(r => r.status === "approved")
         .map(r => parseFloat(String(r.duration || 0)))
-      const totalApprovedRecordingTime = approvedDurations.reduce((sum, d) => sum + d, 0)
-      
-      // Calculate total time for rejected recordings only
-      const rejectedDurations = allRecordings
-        .filter(r => r.status === "rejected")
-        .map(r => parseFloat(String(r.duration || 0)))
-      const totalRejectedRecordingTime = rejectedDurations.reduce((sum, d) => sum + d, 0)
+      const totalValidatedRecordingTime = validatedDurations.reduce((sum, d) => sum + d, 0)
       
       // Calculate total time for pending recordings only
       const pendingDurations = allRecordings
@@ -1426,11 +1409,11 @@ class SupabaseDatabase {
         .map(r => parseFloat(String(r.duration || 0)))
       const totalPendingRecordingTime = pendingDurations.reduce((sum, d) => sum + d, 0)
       
-      const reviewTimes = allReviews.map(r => r.time_spent || 0)
-      const totalReviewTime = reviewTimes.reduce((sum, t) => sum + t, 0)
-      const averageReviewTime = reviewTimes.length > 0 ? totalReviewTime / reviewTimes.length : 0
+      const validationTimes = allReviews.map(r => r.time_spent || 0)
+      const totalValidationTime = validationTimes.reduce((sum, t) => sum + t, 0)
+      const averageValidationTime = validationTimes.length > 0 ? totalValidationTime / validationTimes.length : 0
 
-      console.log(`✅ System stats calculated: ${totalRecordings || 0} total recordings, ${totalReviews || 0} total reviews (${approvedRecordings || 0} approved + ${rejectedRecordings || 0} rejected)`)
+      console.log(`✅ System stats calculated: ${totalRecordings || 0} total recordings, ${totalValidationsCount || 0} total validations (${validatedRecordings || 0} validated, ${editedRecordings || 0} edited)`)
 
       return {
         totalUsers: totalUsers || 0,
@@ -1439,18 +1422,17 @@ class SupabaseDatabase {
         pendingReviewers: pendingReviewers || 0,
         totalRecordings: totalRecordings || 0,
         pendingRecordings: pendingRecordings || 0,
-        approvedRecordings: approvedRecordings || 0,
-        rejectedRecordings: rejectedRecordings || 0,
-        totalReviews: totalReviews || 0,
+        validatedRecordings: validatedRecordings || 0,
+        editedRecordings: editedRecordings || 0,
+        totalValidations: totalValidationsCount || 0,
         activeUsers: activeUsers || 0,
         averageRecordingDuration,
-        averageReviewTime,
+        averageValidationTime,
         totalRecordingTime,
-        totalApprovedRecordingTime,
-        totalRejectedRecordingTime,
+        totalValidatedRecordingTime,
         totalPendingRecordingTime,
-        totalReviewTime,
-        totalSystemTime: totalRecordingTime + totalReviewTime,
+        totalValidationTime,
+        totalSystemTime: totalRecordingTime + totalValidationTime,
       }
     } catch (error) {
       console.error("Error getting system stats:", error)
@@ -1466,17 +1448,16 @@ class SupabaseDatabase {
       pendingReviewers: 0,
       totalRecordings: 0,
       pendingRecordings: 0,
-      approvedRecordings: 0,
-      rejectedRecordings: 0,
-      totalReviews: 0,
+      validatedRecordings: 0,
+      editedRecordings: 0,
+      totalValidations: 0,
       activeUsers: 0,
       averageRecordingDuration: 0,
-      averageReviewTime: 0,
+      averageValidationTime: 0,
       totalRecordingTime: 0,
-      totalApprovedRecordingTime: 0,
-      totalRejectedRecordingTime: 0,
+      totalValidatedRecordingTime: 0,
       totalPendingRecordingTime: 0,
-      totalReviewTime: 0,
+      totalValidationTime: 0,
       totalSystemTime: 0,
     }
   }

@@ -7,7 +7,7 @@ import { Card, CardContent } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog"
 import { Textarea } from "@/components/ui/textarea"
-import { Play, Pause, ThumbsUp, ThumbsDown, SkipForward, HelpCircle, Flag, Volume2, ChevronLeft, ChevronRight, RotateCcw, List, Edit2, Check, X } from "lucide-react"
+import { Play, Pause, ThumbsUp, SkipForward, HelpCircle, Volume2, ChevronLeft, ChevronRight, RotateCcw, List, Edit2, Check, X, Flag } from "lucide-react"
 import { db, type Recording } from "@/lib/database"
 import { useToast } from "@/hooks/use-toast"
 import { supabase } from "@/lib/supabase"
@@ -18,7 +18,7 @@ export default function ListenPage() {
   const [isPlaying, setIsPlaying] = useState(false)
   const [currentRecording, setCurrentRecording] = useState<Recording | null>(null)
   const [sentenceCount, setSentenceCount] = useState(1) // Current recording position (for navigation)
-  const [reviewsCompleted, setReviewsCompleted] = useState(0) // Actual reviews completed (approve/reject only)
+  const [reviewsCompleted, setReviewsCompleted] = useState(0) // Total validations completed
   const [sessionReviews, setSessionReviews] = useState(0)
   const [pendingRecordings, setPendingRecordings] = useState<Recording[]>([])
   const [loading, setLoading] = useState(true)
@@ -45,8 +45,6 @@ export default function ListenPage() {
   const [reviewedRecordingIds, setReviewedRecordingIds] = useState<Set<string>>(new Set())
   const [skippedRecordings, setSkippedRecordings] = useState<Recording[]>([])
   const [showSkippedRecordings, setShowSkippedRecordings] = useState(false)
-  const [showRejectDialog, setShowRejectDialog] = useState(false)
-  const [rejectionComment, setRejectionComment] = useState('')
   const [audioLoadError, setAudioLoadError] = useState<string | null>(null)
   const [isEditingSentence, setIsEditingSentence] = useState(false)
   const [editedSentence, setEditedSentence] = useState('')
@@ -128,13 +126,11 @@ export default function ListenPage() {
                   console.log('➡️ Moving to next recording:', nextRecording.id)
                   setReviewStartTime(Date.now())
                   setHasListenedToEnd(false)
-                  setRejectionComment('')
                   return nextRecording
                 } else {
                   console.log('📭 No more recordings available')
                   setReviewStartTime(Date.now())
                   setHasListenedToEnd(false)
-                  setRejectionComment('')
                   return null
                 }
               }
@@ -787,7 +783,7 @@ export default function ListenPage() {
     setHasListenedToEnd(true)
     toast({
       title: "Audio Complete",
-      description: "You can now approve or reject this recording.",
+      description: "You can now validate this transcription.",
     })
   }
 
@@ -807,17 +803,6 @@ export default function ListenPage() {
     }
   }
 
-  const handleRejectClick = () => {
-    if (!hasListenedToEnd) {
-      toast({
-        title: "Please Listen First",
-        description: "You must listen to the entire audio before approving or rejecting.",
-        variant: "destructive",
-      })
-      return
-    }
-    setShowRejectDialog(true)
-  }
 
   const handleValidation = async (isValid: boolean) => {
     if (!currentRecording || !user) return
@@ -838,23 +823,27 @@ export default function ListenPage() {
       // Check if sentence was edited
       const sentenceWasEdited = editedSentence.trim() !== currentRecording.sentence.trim()
       
-      // Update recording sentence if it was edited
+      // Update recording with new transcription validation fields
       if (sentenceWasEdited && editedSentence.trim()) {
         try {
           await db.updateRecording(currentRecording.id, {
-            sentence: editedSentence.trim(),
+            original_sentence: currentRecording.sentence, // Preserve original
+            sentence: editedSentence.trim(),               // Update with corrected version
+            transcription_edited: true,                    // Mark as edited
+            edited_by: user.id,                           // Track who edited
+            edited_at: new Date().toISOString(),          // Track when edited
           })
-          console.log('✅ Recording sentence updated:', editedSentence.trim())
+          console.log('✅ Recording transcription updated and tracked:', editedSentence.trim())
         } catch (updateError) {
-          console.error('Error updating recording sentence:', updateError)
+          console.error('Error updating recording transcription:', updateError)
           // Continue with review even if sentence update fails
         }
       }
 
       // Create review notes - include sentence edit info if applicable
-      let reviewNotes = "Good quality recording"
+      let reviewNotes = "Transcription verified as correct"
       if (sentenceWasEdited && editedSentence.trim()) {
-        reviewNotes = `Good quality recording. Sentence corrected from: "${currentRecording.sentence}" to: "${editedSentence.trim()}"`
+        reviewNotes = `Transcription corrected from: "${currentRecording.sentence}" to: "${editedSentence.trim()}"`
       }
 
       // Create review (always approved)
@@ -868,8 +857,10 @@ export default function ListenPage() {
       })
 
       toast({
-        title: "Success",
-        description: `Review submitted successfully${sentenceWasEdited ? " with edited sentence" : ""}`,
+        title: sentenceWasEdited ? "Transcription Edited" : "Transcription Passed",
+        description: sentenceWasEdited 
+          ? "Recording submitted with edited transcription" 
+          : "Recording passed - transcription is correct",
       })
 
       // Mark this recording as reviewed - prevent it from appearing again
@@ -890,8 +881,6 @@ export default function ListenPage() {
         setSessionReviews((prev) => prev + 1) // Increment today's session count
         setCurrentRecordingIndex(prev => prev + 1)
         setHasListenedToEnd(false) // Reset for next recording
-        setRejectionComment('') // Clear rejection comment
-        setShowRejectDialog(false) // Close reject dialog
         setIsEditingSentence(false) // Reset editing state
         setEditedSentence('') // Clear edited sentence
       } else {
@@ -900,8 +889,6 @@ export default function ListenPage() {
         setReviewsCompleted((prev) => prev + 1) // Increment total reviews completed
         setSessionReviews((prev) => prev + 1) // Increment today's session count
         setHasListenedToEnd(false) // Reset
-        setRejectionComment('') // Clear rejection comment
-        setShowRejectDialog(false) // Close reject dialog
         toast({
           title: "All Done!",
           description: "No more recordings to review at this time.",
@@ -1095,12 +1082,12 @@ export default function ListenPage() {
       <div className="flex flex-col sm:flex-row items-center justify-between gap-3 sm:gap-4 mb-4 bg-white rounded-lg p-3 sm:p-4 shadow-lg border border-gray-200">
         <div className="inline-flex items-center space-x-2 bg-gradient-to-r from-blue-500 to-blue-600 px-3 sm:px-4 py-1.5 sm:py-2 rounded-full shadow-md">
           <Volume2 className="w-4 h-4 sm:w-5 sm:h-5 text-white" />
-          <span className="text-xs sm:text-sm text-white font-medium" style={{ fontFamily: 'Poppins, sans-serif' }}>Review Session</span>
+          <span className="text-xs sm:text-sm text-white font-medium" style={{ fontFamily: 'Poppins, sans-serif' }}>Validation Session</span>
         </div>
-        <h1 className="text-xl sm:text-2xl md:text-3xl font-bold text-gray-900 order-first sm:order-none" style={{ fontFamily: 'Poppins, sans-serif' }}>Listen</h1>
+        <h1 className="text-xl sm:text-2xl md:text-3xl font-bold text-gray-900 order-first sm:order-none" style={{ fontFamily: 'Poppins, sans-serif' }}>Validate Transcriptions</h1>
         <div className="bg-blue-50 p-3 sm:p-4 rounded-xl border border-blue-200 w-full sm:max-w-xs md:max-w-md text-center sm:text-right">
           <p className="text-xs sm:text-sm text-blue-800 font-bold leading-relaxed" style={{ fontFamily: 'Poppins, sans-serif' }}>
-          Click play, listen, then approve or reject based on quality.
+          Listen, verify the transcription matches the audio, edit if needed, then submit.
         </p>
         </div>
       </div>
@@ -1203,22 +1190,20 @@ export default function ListenPage() {
               <div className="group flex items-center space-x-2.5 p-2.5 rounded-xl bg-white/60 backdrop-blur-sm border border-white/30 hover:bg-white/80 transition-all duration-300 hover:shadow-md">
                 <div className="w-5 h-5 bg-gradient-to-r from-green-500 to-emerald-600 rounded-lg flex items-center justify-center flex-shrink-0">
                   <svg className="w-2.5 h-2.5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
                   </svg>
                 </div>
                 <p className="text-xs font-semibold text-gray-800" style={{ fontFamily: 'Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif' }}>
-                  Check pronunciation
+                  Verify transcription
                 </p>
               </div>
 
               <div className="group flex items-center space-x-2.5 p-2.5 rounded-xl bg-white/60 backdrop-blur-sm border border-white/30 hover:bg-white/80 transition-all duration-300 hover:shadow-md">
                 <div className="w-5 h-5 bg-gradient-to-r from-purple-500 to-purple-600 rounded-lg flex items-center justify-center flex-shrink-0">
-                  <svg className="w-2.5 h-2.5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19.428 15.428a2 2 0 00-1.022-.547l-2.387-.477a6 6 0 00-3.86.517l-.318.158a6 6 0 01-3.86.517L6.05 15.21a2 2 0 00-1.806.547M8 4h8l-1 1v5.172a2 2 0 00.586 1.414l5 5c1.26 1.26.367 3.414-1.415 3.414H4.828c-1.782 0-2.674-2.154-1.414-3.414l5-5A2 2 0 009 10.172V5L8 4z" />
-                  </svg>
+                  <Edit2 className="w-2.5 h-2.5 text-white" />
                 </div>
                 <p className="text-xs font-semibold text-gray-800" style={{ fontFamily: 'Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif' }}>
-                  Check for noise
+                  Edit if needed
                 </p>
               </div>
 
@@ -1233,12 +1218,10 @@ export default function ListenPage() {
 
               <div className="group flex items-center space-x-2.5 p-2.5 rounded-xl bg-gradient-to-r from-green-500/10 to-emerald-500/10 backdrop-blur-sm border border-green-200/50 hover:bg-green-500/20 transition-all duration-300 hover:shadow-md">
                 <div className="w-5 h-5 bg-gradient-to-r from-green-500 to-emerald-600 rounded-lg flex items-center justify-center flex-shrink-0">
-                  <svg className="w-2.5 h-2.5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-                  </svg>
+                  <Check className="w-2.5 h-2.5 text-white" />
                 </div>
                 <p className="text-xs font-semibold text-gray-800" style={{ fontFamily: 'Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif' }}>
-                  Submit your review
+                  Pass or Edited
                 </p>
               </div>
             </div>
@@ -1456,18 +1439,32 @@ export default function ListenPage() {
                     </div>
                   )}
                   
-                  <div className="flex justify-center px-4 sm:px-0">
-                    <Button
-                      onClick={() => handleValidation(true)}
-                      size="default"
-                      disabled={!hasListenedToEnd}
-                      className={`flex items-center gap-2 h-auto py-3 px-8 bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-700 hover:to-blue-800 text-white rounded-xl shadow-lg hover:shadow-xl transition-all duration-300 transform hover:scale-105 active:scale-95 touch-manipulation min-w-[200px] font-semibold text-base border-2 border-blue-500 ${
-                        !hasListenedToEnd ? 'opacity-50 cursor-not-allowed hover:scale-100' : ''
-                      }`}
-                    >
-                      <Check className="h-5 w-5" />
-                      <span>Submit Review</span>
-                    </Button>
+                  <div className="flex justify-center px-4 sm:px-0 gap-3">
+                    {editedSentence.trim() !== currentRecording.sentence.trim() && editedSentence.trim() ? (
+                      <Button
+                        onClick={() => handleValidation(true)}
+                        size="default"
+                        disabled={!hasListenedToEnd}
+                        className={`flex items-center gap-2 h-auto py-3 px-8 bg-gradient-to-r from-purple-600 to-purple-700 hover:from-purple-700 hover:to-purple-800 text-white rounded-xl shadow-lg hover:shadow-xl transition-all duration-300 transform hover:scale-105 active:scale-95 touch-manipulation min-w-[200px] font-semibold text-lg border-2 border-purple-500 ${
+                          !hasListenedToEnd ? 'opacity-50 cursor-not-allowed hover:scale-100' : ''
+                        }`}
+                      >
+                        <Edit2 className="h-5 w-5" />
+                        <span>Edited</span>
+                      </Button>
+                    ) : (
+                      <Button
+                        onClick={() => handleValidation(true)}
+                        size="default"
+                        disabled={!hasListenedToEnd}
+                        className={`flex items-center gap-2 h-auto py-3 px-8 bg-gradient-to-r from-green-600 to-green-700 hover:from-green-700 hover:to-green-800 text-white rounded-xl shadow-lg hover:shadow-xl transition-all duration-300 transform hover:scale-105 active:scale-95 touch-manipulation min-w-[200px] font-semibold text-lg border-2 border-green-500 ${
+                          !hasListenedToEnd ? 'opacity-50 cursor-not-allowed hover:scale-100' : ''
+                        }`}
+                      >
+                        <Check className="h-5 w-5" />
+                        <span>Pass</span>
+                      </Button>
+                    )}
                   </div>
                 </div>
               </div>
@@ -1477,67 +1474,6 @@ export default function ListenPage() {
         </div>
       </div>
 
-      {/* Rejection Comment Dialog */}
-      <Dialog open={showRejectDialog} onOpenChange={setShowRejectDialog}>
-        <DialogContent className="max-w-md">
-          <DialogHeader>
-            <DialogTitle className="flex items-center space-x-2">
-              <ThumbsDown className="h-5 w-5 text-red-500" />
-              <span>Reject Recording</span>
-            </DialogTitle>
-            <DialogDescription>
-              Please provide a reason for rejecting this recording. This will help the contributor improve.
-            </DialogDescription>
-          </DialogHeader>
-          
-          <div className="space-y-4">
-            <div className="space-y-2">
-              <label htmlFor="rejectionComment" className="text-sm font-medium text-gray-900">
-                Reason for Rejection *
-              </label>
-              <Textarea
-                id="rejectionComment"
-                value={rejectionComment}
-                onChange={(e) => setRejectionComment(e.target.value)}
-                placeholder="e.g., Background noise too high, unclear pronunciation, incomplete sentence..."
-                className="min-h-[120px] resize-none"
-                required
-              />
-              <p className="text-xs text-gray-500">
-                Be specific and constructive. This comment will be visible to administrators.
-              </p>
-            </div>
-
-            {rejectionComment.trim().length > 0 && rejectionComment.trim().length < 10 && (
-              <div className="bg-amber-50 border border-amber-200 rounded-lg p-2">
-                <p className="text-xs text-amber-700">
-                  Please provide a more detailed explanation (at least 10 characters)
-                </p>
-              </div>
-            )}
-          </div>
-
-          <DialogFooter>
-            <Button
-              variant="outline"
-              onClick={() => {
-                setShowRejectDialog(false)
-                setRejectionComment('')
-              }}
-              className="mr-2"
-            >
-              Cancel
-            </Button>
-            <Button
-              onClick={() => handleValidation(false)}
-              disabled={!rejectionComment.trim() || rejectionComment.trim().length < 10}
-              className="bg-red-600 hover:bg-red-700 text-white"
-            >
-              Confirm Rejection
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
 
       {/* Guidelines Dialog */}
       <Dialog open={showGuidelines} onOpenChange={setShowGuidelines}>
@@ -1548,7 +1484,7 @@ export default function ListenPage() {
               <span>Review Guidelines</span>
             </DialogTitle>
             <DialogDescription className="text-base">
-              Follow these guidelines to ensure accurate and consistent reviews
+              Follow these guidelines to validate and correct transcriptions accurately
             </DialogDescription>
           </DialogHeader>
           
@@ -1556,24 +1492,24 @@ export default function ListenPage() {
             <div className="space-y-4 bg-blue-50/50 p-4 rounded-lg border border-blue-100">
               <h3 className="text-xl font-bold text-gray-900 flex items-center gap-2">
                 <span className="text-blue-500">●</span>
-                Quality Assessment
+                Transcription Validation
               </h3>
               <ul className="space-y-3 text-base text-gray-700">
                 <li className="flex items-start space-x-2">
                   <span className="text-blue-500 mt-1">•</span>
-                  <span>Listen to the entire recording before making a decision</span>
+                  <span>Listen to the entire recording carefully</span>
                 </li>
                 <li className="flex items-start space-x-2">
                   <span className="text-blue-500 mt-1">•</span>
-                  <span>Focus on clarity, pronunciation, and natural speech flow</span>
+                  <span>Read the displayed transcription while listening</span>
                 </li>
                 <li className="flex items-start space-x-2">
                   <span className="text-blue-500 mt-1">•</span>
-                  <span>Consider the speaker's accent and dialect variations</span>
+                  <span>Compare what you hear with what the sentence says</span>
                 </li>
                 <li className="flex items-start space-x-2">
                   <span className="text-blue-500 mt-1">•</span>
-                  <span>Evaluate if the sentence was read accurately and completely</span>
+                  <span>Replay if needed to confirm accuracy</span>
                 </li>
               </ul>
             </div>
@@ -1581,57 +1517,24 @@ export default function ListenPage() {
             <div className="space-y-4 bg-green-50/50 p-4 rounded-lg border border-green-100">
               <h3 className="text-xl font-bold text-gray-900 flex items-center gap-2">
                 <span className="text-green-500">●</span>
-                Approval Criteria (YES)
+                Click "Pass"
               </h3>
               <ul className="space-y-3 text-base text-gray-700">
                 <li className="flex items-start space-x-2">
                   <span className="text-green-500 mt-1">•</span>
-                  <span>Clear and understandable pronunciation</span>
+                  <span>The audio matches the transcription perfectly</span>
                 </li>
                 <li className="flex items-start space-x-2">
                   <span className="text-green-500 mt-1">•</span>
-                  <span>Complete sentence was read without omissions</span>
+                  <span>Every word in the transcription was spoken correctly</span>
                 </li>
                 <li className="flex items-start space-x-2">
                   <span className="text-green-500 mt-1">•</span>
-                  <span>Natural speech rhythm and pacing</span>
+                  <span>No words were omitted, added, or changed</span>
                 </li>
                 <li className="flex items-start space-x-2">
                   <span className="text-green-500 mt-1">•</span>
-                  <span>Minimal background noise or interference</span>
-                </li>
-                <li className="flex items-start space-x-2">
-                  <span className="text-green-500 mt-1">•</span>
-                  <span>Appropriate volume and audio quality</span>
-                </li>
-              </ul>
-            </div>
-
-            <div className="space-y-4 bg-red-50/50 p-4 rounded-lg border border-red-100">
-              <h3 className="text-xl font-bold text-gray-900 flex items-center gap-2">
-                <span className="text-red-500">●</span>
-                Rejection Criteria (NO)
-              </h3>
-              <ul className="space-y-3 text-base text-gray-700">
-                <li className="flex items-start space-x-2">
-                  <span className="text-red-500 mt-1">•</span>
-                  <span>Unclear or mumbled speech</span>
-                </li>
-                <li className="flex items-start space-x-2">
-                  <span className="text-red-500 mt-1">•</span>
-                  <span>Incomplete sentence reading</span>
-                </li>
-                <li className="flex items-start space-x-2">
-                  <span className="text-red-500 mt-1">•</span>
-                  <span>Excessive background noise or interference</span>
-                </li>
-                <li className="flex items-start space-x-2">
-                  <span className="text-red-500 mt-1">•</span>
-                  <span>Technical issues (audio distortion, cutting out)</span>
-                </li>
-                <li className="flex items-start space-x-2">
-                  <span className="text-red-500 mt-1">•</span>
-                  <span>Reading errors or mispronunciations that affect clarity</span>
+                  <span>Click the green "Pass" button when verified</span>
                 </li>
               </ul>
             </div>
@@ -1639,24 +1542,49 @@ export default function ListenPage() {
             <div className="space-y-4 bg-purple-50/50 p-4 rounded-lg border border-purple-100">
               <h3 className="text-xl font-bold text-gray-900 flex items-center gap-2">
                 <span className="text-purple-500">●</span>
-                Review Process
+                Edit Transcription
               </h3>
               <ul className="space-y-3 text-base text-gray-700">
                 <li className="flex items-start space-x-2">
                   <span className="text-purple-500 mt-1">•</span>
-                  <span>Listen to each recording at least once before deciding</span>
+                  <span>If the audio doesn't match the text, click the edit button (pencil icon)</span>
                 </li>
                 <li className="flex items-start space-x-2">
                   <span className="text-purple-500 mt-1">•</span>
-                  <span>Use the waveform to navigate and replay sections if needed</span>
+                  <span>Correct the transcription to match what was actually spoken</span>
                 </li>
                 <li className="flex items-start space-x-2">
                   <span className="text-purple-500 mt-1">•</span>
-                  <span>Be consistent in your evaluation criteria</span>
+                  <span>Fix spelling errors, omissions, or incorrect words</span>
                 </li>
                 <li className="flex items-start space-x-2">
                   <span className="text-purple-500 mt-1">•</span>
-                  <span>Skip recordings if you're unsure or need a break</span>
+                  <span>Click "Save" to confirm your edits, then click the purple "Edited" button</span>
+                </li>
+              </ul>
+            </div>
+
+            <div className="space-y-4 bg-orange-50/50 p-4 rounded-lg border border-orange-100">
+              <h3 className="text-xl font-bold text-gray-900 flex items-center gap-2">
+                <span className="text-orange-500">●</span>
+                Best Practices
+              </h3>
+              <ul className="space-y-3 text-base text-gray-700">
+                <li className="flex items-start space-x-2">
+                  <span className="text-orange-500 mt-1">•</span>
+                  <span>Be precise - every word matters</span>
+                </li>
+                <li className="flex items-start space-x-2">
+                  <span className="text-orange-500 mt-1">•</span>
+                  <span>Listen multiple times if unsure</span>
+                </li>
+                <li className="flex items-start space-x-2">
+                  <span className="text-orange-500 mt-1">•</span>
+                  <span>Consider accent and dialect variations</span>
+                </li>
+                <li className="flex items-start space-x-2">
+                  <span className="text-orange-500 mt-1">•</span>
+                  <span>Skip if you absolutely can't understand the audio</span>
                 </li>
               </ul>
             </div>

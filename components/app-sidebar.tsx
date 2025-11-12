@@ -71,8 +71,7 @@ export function AppSidebar() {
     <Sidebar>
       <SidebarHeader>
         <div className="px-2 py-2">
-          <h2 className="text-lg font-semibold">Common Voice Luo</h2>
-          <p className="text-sm text-muted-foreground">mozilla</p>
+          <h2 className="text-lg font-semibold">Africa Next Voices</h2>
         </div>
       </SidebarHeader>
 

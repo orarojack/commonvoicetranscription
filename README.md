@@ -1,4 +1,4 @@
-# Common Voice Luo
+# Africa Next Voices
 
 A voice contribution and validation platform built with Next.js, Supabase, and TypeScript.
 

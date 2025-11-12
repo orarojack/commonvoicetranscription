@@ -48,7 +48,7 @@ export async function sendEmailNotification(params: SendEmailParams): Promise<{ 
 export function generateApprovalEmail(reviewerName: string | null, reviewerEmail: string): { subject: string; html: string } {
   const name = reviewerName || 'Reviewer'
   
-  const subject = 'Reviewer Application Approved - Common Voice Luo'
+  const subject = 'Reviewer Application Approved - Africa Next Voices'
   
   const html = `
 <!DOCTYPE html>
@@ -66,7 +66,7 @@ export function generateApprovalEmail(reviewerName: string | null, reviewerEmail
           <!-- Header -->
           <tr>
             <td style="padding: 30px 30px 20px; text-align: center; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); border-radius: 8px 8px 0 0;">
-              <h1 style="margin: 0; color: #ffffff; font-size: 24px; font-weight: 600;">Common Voice Luo</h1>
+              <h1 style="margin: 0; color: #ffffff; font-size: 24px; font-weight: 600;">Africa Next Voices</h1>
             </td>
           </tr>
           
@@ -105,10 +105,10 @@ export function generateApprovalEmail(reviewerName: string | null, reviewerEmail
           <tr>
             <td style="padding: 20px 30px; background-color: #f9fafb; border-radius: 0 0 8px 8px; text-align: center;">
               <p style="margin: 0; color: #6b7280; font-size: 12px;">
-                This is an automated notification from Common Voice Luo Platform.
+                This is an automated notification from Africa Next Voices Platform.
               </p>
               <p style="margin: 5px 0 0; color: #9ca3af; font-size: 12px;">
-                © ${new Date().getFullYear()} Common Voice Luo. All rights reserved.
+                © ${new Date().getFullYear()} Africa Next Voices. All rights reserved.
               </p>
             </td>
           </tr>
@@ -129,7 +129,7 @@ export function generateApprovalEmail(reviewerName: string | null, reviewerEmail
 export function generateRejectionEmail(reviewerName: string | null, reviewerEmail: string): { subject: string; html: string } {
   const name = reviewerName || 'Reviewer'
   
-  const subject = 'Reviewer Application Update - Common Voice Luo'
+  const subject = 'Reviewer Application Update - Africa Next Voices'
   
   const html = `
 <!DOCTYPE html>
@@ -147,7 +147,7 @@ export function generateRejectionEmail(reviewerName: string | null, reviewerEmai
           <!-- Header -->
           <tr>
             <td style="padding: 30px 30px 20px; text-align: center; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); border-radius: 8px 8px 0 0;">
-              <h1 style="margin: 0; color: #ffffff; font-size: 24px; font-weight: 600;">Common Voice Luo</h1>
+              <h1 style="margin: 0; color: #ffffff; font-size: 24px; font-weight: 600;">Africa Next Voices</h1>
             </td>
           </tr>
           
@@ -157,7 +157,7 @@ export function generateRejectionEmail(reviewerName: string | null, reviewerEmai
               <h2 style="margin: 0 0 20px; color: #1a1a1a; font-size: 22px; font-weight: 600;">Dear ${name},</h2>
               
               <p style="margin: 0 0 20px; color: #4a4a4a; font-size: 16px; line-height: 1.6;">
-                Thank you for your interest in becoming a reviewer for the Common Voice Luo platform.
+                Thank you for your interest in becoming a reviewer for the Africa Next Voices platform.
               </p>
               
               <p style="margin: 0 0 20px; color: #4a4a4a; font-size: 16px; line-height: 1.6;">
@@ -180,10 +180,10 @@ export function generateRejectionEmail(reviewerName: string | null, reviewerEmai
           <tr>
             <td style="padding: 20px 30px; background-color: #f9fafb; border-radius: 0 0 8px 8px; text-align: center;">
               <p style="margin: 0; color: #6b7280; font-size: 12px;">
-                This is an automated notification from Common Voice Luo Platform.
+                This is an automated notification from Africa Next Voices Platform.
               </p>
               <p style="margin: 5px 0 0; color: #9ca3af; font-size: 12px;">
-                © ${new Date().getFullYear()} Common Voice Luo. All rights reserved.
+                © ${new Date().getFullYear()} Africa Next Voices. All rights reserved.
               </p>
             </td>
           </tr>

@@ -762,17 +762,16 @@ export default function AdminDashboardPage() {
     pendingReviewers: 0,
     totalRecordings: 0,
     pendingRecordings: 0,
-    approvedRecordings: 0,
-    rejectedRecordings: 0,
-    totalReviews: 0,
+    validatedRecordings: 0, // Changed from approvedRecordings
+    editedRecordings: 0, // Track edited transcriptions
+    totalValidations: 0, // Changed from totalReviews
     activeUsers: 0,
     averageRecordingDuration: 0,
-    averageReviewTime: 0,
+    averageValidationTime: 0, // Changed from averageReviewTime
     totalRecordingTime: 0,
-    totalApprovedRecordingTime: 0,
-    totalRejectedRecordingTime: 0,
+    totalValidatedRecordingTime: 0, // Changed from totalApprovedRecordingTime
     totalPendingRecordingTime: 0,
-    totalReviewTime: 0,
+    totalValidationTime: 0, // Changed from totalReviewTime
     totalSystemTime: 0,
   })
   const [loading, setLoading] = useState(true)
@@ -1292,7 +1291,7 @@ export default function AdminDashboardPage() {
       if (filterStatus === "all") {
         matchesStatus = true;
       } else if (filterStatus === "reviewed") {
-        matchesStatus = recording.status === "approved" || recording.status === "rejected";
+        matchesStatus = recording.status === "approved"; // Validated recordings
       } else {
         matchesStatus = recording.status === filterStatus;
       }
@@ -1781,7 +1780,7 @@ export default function AdminDashboardPage() {
       // Prepare CSV data
       const csvData = [
         // Header row
-        ['Name', 'Email', 'Role', 'Status', 'Join Date', 'Profile Complete', 'Age', 'Gender', 'Phone Number', 'Location', 'Educational Background', 'Employment Status', 'Language Dialect', 'Languages', 'Total Recordings', 'Approved Recordings', 'Rejected Recordings', 'Total Reviews', 'Approved Reviews', 'Rejected Reviews', 'Avg Confidence'],
+        ['Name', 'Email', 'Role', 'Status', 'Join Date', 'Profile Complete', 'Age', 'Gender', 'Phone Number', 'Location', 'Educational Background', 'Employment Status', 'Language Dialect', 'Languages', 'Total Recordings', 'Validated Recordings', 'Edited Transcriptions', 'Total Validations', 'Passed', 'Edited', 'Avg Confidence'],
         // Data rows
         ...filteredUsers.map(user => {
           const stats = getUserStatsById(user.id)
@@ -1802,11 +1801,11 @@ export default function AdminDashboardPage() {
             user.language_dialect || 'N/A',
             user.languages && user.languages.length > 0 ? user.languages.join('; ') : 'N/A',
             stats?.totalRecordings || 0,
-            stats?.approvedRecordings || 0,
-            stats?.rejectedRecordings || 0,
-            stats?.totalReviews || 0,
-            stats?.approvedReviews || 0,
-            stats?.rejectedReviews || 0,
+            (stats?.approvedRecordings || 0), // Validated recordings
+            0, // Edited transcriptions (will be calculated from db)
+            stats?.totalReviews || 0, // Total validations
+            (stats?.approvedReviews || 0), // Passed
+            0, // Edited (will be calculated from db)
             stats?.accuracyRate?.toFixed(1) + '%' || 'N/A'
           ];
         })
@@ -1854,7 +1853,7 @@ export default function AdminDashboardPage() {
         if (filterStatus === "all") {
           matchesStatus = true;
         } else if (filterStatus === "reviewed") {
-          matchesStatus = recording.status === "approved" || recording.status === "rejected";
+          matchesStatus = recording.status === "approved"; // Validated recordings
         } else {
           matchesStatus = recording.status === filterStatus;
         }
@@ -1999,7 +1998,7 @@ export default function AdminDashboardPage() {
           <CardContent className="pt-1">
             <div className="text-xl font-bold text-green-900">{systemStats.totalRecordings}</div>
             <p className="text-xs text-green-600">
-              Avg: {systemStats.averageReviewTime.toFixed(1)}s
+              Avg: {systemStats.averageValidationTime?.toFixed(1) || 0}s
             </p>
           </CardContent>
         </Card>
@@ -2009,20 +2008,20 @@ export default function AdminDashboardPage() {
           onClick={() => {
             setActiveTab("recordings")
             setRecordingSearchTerm("")
-            // Set filter to show only reviewed recordings (approved and rejected)
+            // Set filter to show only validated recordings
             setFilterStatus("reviewed")
           }}
         >
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-1">
-            <CardTitle className="text-xs font-medium text-purple-800">Total Reviews</CardTitle>
+            <CardTitle className="text-xs font-medium text-purple-800">Validated Recordings</CardTitle>
             <div className="p-1 bg-purple-500 rounded">
               <Headphones className="h-3 w-3 text-white" />
             </div>
           </CardHeader>
           <CardContent className="pt-1">
-            <div className="text-xl font-bold text-purple-900">{systemStats.totalReviews}</div>
+            <div className="text-xl font-bold text-purple-900">{systemStats.totalValidations}</div>
             <p className="text-xs text-purple-600">
-              {reviews.filter(r => r.decision === 'approved').length} approved, {reviews.filter(r => r.decision === 'rejected').length} rejected
+              {recordings.filter(r => r.status === 'approved' && !r.transcription_edited).length} passed, {recordings.filter(r => r.status === 'approved' && r.transcription_edited).length} edited
             </p>
           </CardContent>
         </Card>
@@ -2081,7 +2080,7 @@ export default function AdminDashboardPage() {
             </div>
           </CardHeader>
           <CardContent className="pt-1">
-            <div className="text-xl font-bold text-indigo-900">{formatTime(systemStats.totalApprovedRecordingTime)}</div>
+            <div className="text-xl font-bold text-indigo-900">{formatTime(systemStats.totalValidatedRecordingTime || 0)}</div>
             <p className="text-xs text-indigo-600">Total Approved</p>
           </CardContent>
         </Card>
@@ -2184,7 +2183,7 @@ export default function AdminDashboardPage() {
                         <div className="flex-1">
                           <p className="text-sm font-medium">{user.name || user.email}</p>
                           <p className="text-xs text-gray-500">
-                            {stats?.totalRecordings || 0} recordings • {stats?.approvedRecordings || 0} approved
+                            {stats?.totalRecordings || 0} recordings • {stats?.approvedRecordings || 0} validated
                           </p>
                         </div>
                         <div className="text-right">
@@ -2313,15 +2312,15 @@ export default function AdminDashboardPage() {
                               <>
                                 <p>{stats?.totalRecordings || 0} recordings</p>
                                 <p className="text-xs text-gray-500">
-                                  {stats?.approvedRecordings || 0} approved, {stats?.rejectedRecordings || 0} rejected
+                                  {stats?.approvedRecordings || 0} validated, {stats?.pendingRecordings || 0} pending
                                 </p>
                               </>
                             )}
                             {user.role === "reviewer" && (
                               <>
-                                <p>{stats?.totalReviews || 0} reviews</p>
+                                <p>{stats?.totalReviews || 0} validations</p>
                                 <p className="text-xs text-gray-500">
-                                  {stats?.approvedReviews || 0} approved, {stats?.rejectedReviews || 0} rejected
+                                  {stats?.approvedReviews || 0} passed
                                 </p>
                               </>
                             )}
@@ -2442,8 +2441,7 @@ export default function AdminDashboardPage() {
                     <SelectItem value="all">All Status</SelectItem>
                     <SelectItem value="pending">Pending</SelectItem>
                     <SelectItem value="approved">Approved</SelectItem>
-                    <SelectItem value="rejected">Rejected</SelectItem>
-                    <SelectItem value="reviewed">Reviewed (Approved + Rejected)</SelectItem>
+                    <SelectItem value="reviewed">Validated</SelectItem>
                   </SelectContent>
                 </Select>
                 <Button
@@ -2584,7 +2582,7 @@ export default function AdminDashboardPage() {
                 <span>Contributors Performance</span>
               </CardTitle>
               <CardDescription>
-                View all contributors with their approved and rejected recording times
+                View all contributors with their validated and pending recording times
               </CardDescription>
             </CardHeader>
             <CardContent>
@@ -2603,8 +2601,8 @@ export default function AdminDashboardPage() {
                     <TableHead>Contributor</TableHead>
                     <TableHead>Email</TableHead>
                     <TableHead>Total Recordings</TableHead>
-                    <TableHead>Approved Time</TableHead>
-                    <TableHead>Rejected Time</TableHead>
+                    <TableHead>Validated Time</TableHead>
+                    <TableHead>Pending Time</TableHead>
                     <TableHead>Status</TableHead>
                     <TableHead>Actions</TableHead>
                   </TableRow>
@@ -2618,25 +2616,25 @@ export default function AdminDashboardPage() {
                         const stats = getUserStatsById(contributor.id)
                         const contributorRecordings = recordings.filter(r => r.user_id === contributor.id)
                         
-                        // Calculate approved time (sum of durations for approved recordings)
-                        const approvedTime = contributorRecordings
+                        // Calculate validated time (sum of durations for validated recordings)
+                        const validatedTime = contributorRecordings
                           .filter(r => r.status === "approved")
                           .reduce((sum, r) => sum + (Number(r.duration) || 0), 0)
                         
-                        // Calculate rejected time (sum of durations for rejected recordings)
-                        const rejectedTime = contributorRecordings
-                          .filter(r => r.status === "rejected")
+                        // Calculate pending time (sum of durations for pending recordings)
+                        const pendingTime = contributorRecordings
+                          .filter(r => r.status === "pending")
                           .reduce((sum, r) => sum + (Number(r.duration) || 0), 0)
                         
-                        const hasReachedOneHour = approvedTime >= 3600
+                        const hasReachedOneHour = validatedTime >= 3600
                         
-                        return { contributor, stats, approvedTime, rejectedTime, hasReachedOneHour }
+                        return { contributor, stats, validatedTime, pendingTime, hasReachedOneHour }
                       })
-                      // Sort: First prioritize those with 1h+ approved (green indicator), then by approved time
+                      // Sort: First prioritize those with 1h+ validated (green indicator), then by validated time
                       .sort((a, b) => {
                         if (a.hasReachedOneHour && !b.hasReachedOneHour) return -1
                         if (!a.hasReachedOneHour && b.hasReachedOneHour) return 1
-                        return b.approvedTime - a.approvedTime
+                        return b.validatedTime - a.validatedTime
                       })
 
                     // Pagination
@@ -2647,7 +2645,7 @@ export default function AdminDashboardPage() {
 
                     return (
                       <>
-                        {paginatedContributors.map(({ contributor, stats, approvedTime, rejectedTime, hasReachedOneHour }) => {
+                        {paginatedContributors.map(({ contributor, stats, validatedTime, pendingTime, hasReachedOneHour }) => {
                       return (
                         <TableRow key={contributor.id}>
                           <TableCell>
@@ -2665,23 +2663,23 @@ export default function AdminDashboardPage() {
                             <div className="text-sm">
                               <p className="font-medium">{stats?.totalRecordings || 0}</p>
                               <p className="text-xs text-gray-500">
-                                {stats?.approvedRecordings || 0} approved, {stats?.rejectedRecordings || 0} rejected
+                                {stats?.approvedRecordings || 0} validated
                               </p>
                             </div>
                           </TableCell>
                           <TableCell>
                             <div className="text-sm">
-                              <p className="font-medium text-green-600">{formatTime(approvedTime)}</p>
+                              <p className="font-medium text-green-600">{formatTime(validatedTime)}</p>
                               <p className="text-xs text-gray-500">
-                                {stats?.approvedRecordings || 0} recordings
+                                {stats?.approvedRecordings || 0} validated
                               </p>
                             </div>
                           </TableCell>
                           <TableCell>
                             <div className="text-sm">
-                              <p className="font-medium text-red-600">{formatTime(rejectedTime)}</p>
+                              <p className="font-medium text-yellow-600">{formatTime(pendingTime)}</p>
                               <p className="text-xs text-gray-500">
-                                {stats?.rejectedRecordings || 0} recordings
+                                {recordings.filter(r => r.user_id === contributor.id && r.status === 'pending').length} pending
                               </p>
                             </div>
                           </TableCell>
@@ -2950,7 +2948,7 @@ export default function AdminDashboardPage() {
                         </div>
                         <div className="grid grid-cols-2 gap-4 text-sm">
                           <div>
-                            <p className="text-gray-500">Total Reviews</p>
+                            <p className="text-gray-500">Total Validations</p>
                             <p className="font-bold">{stats?.totalReviews || 0}</p>
                           </div>
                           <div>
@@ -2962,13 +2960,13 @@ export default function AdminDashboardPage() {
                             <p className="font-bold text-green-600">{stats?.approvedReviews || 0}</p>
                           </div>
                           <div>
-                            <p className="text-gray-500">Rejected</p>
-                            <p className="font-bold text-red-600">{stats?.rejectedReviews || 0}</p>
+                            <p className="text-gray-500">Edited</p>
+                            <p className="font-bold text-purple-600">0</p>
                           </div>
                         </div>
                         <div className="mt-3">
                           <div className="flex justify-between text-xs mb-1">
-                            <span>Approval Rate</span>
+                            <span>Pass Rate</span>
                             <span>
                               {stats?.totalReviews
                                 ? ((stats.approvedReviews / stats.totalReviews) * 100).toFixed(1)
@@ -3028,16 +3026,16 @@ export default function AdminDashboardPage() {
                               </div>
                               <div className="grid grid-cols-3 gap-2 text-xs">
                                 <div>
-                                  <p className="text-gray-500">Reviews</p>
+                                  <p className="text-gray-500">Validations</p>
                                   <p className="font-bold">{stats?.totalReviews || 0}</p>
                                 </div>
                                 <div>
-                                  <p className="text-gray-500">Approved</p>
+                                  <p className="text-gray-500">Passed</p>
                                   <p className="font-bold text-green-600">{stats?.approvedReviews || 0}</p>
                                 </div>
                                 <div>
-                                  <p className="text-gray-500">Rejected</p>
-                                  <p className="font-bold text-red-600">{stats?.rejectedReviews || 0}</p>
+                                  <p className="text-gray-500">Edited</p>
+                                  <p className="font-bold text-purple-600">0</p>
                                 </div>
                               </div>
                             </div>
@@ -3059,10 +3057,10 @@ export default function AdminDashboardPage() {
                 <div className="space-y-6">
                   <div>
                     <div className="flex justify-between text-sm mb-2">
-                      <span>Recording Approval Rate</span>
+                      <span>Recording Validation Rate</span>
                       <span>
                         {systemStats.totalRecordings
-                          ? ((systemStats.approvedRecordings / systemStats.totalRecordings) * 100).toFixed(1)
+                          ? ((systemStats.validatedRecordings / systemStats.totalRecordings) * 100).toFixed(1)
                           : 0}
                         %
                       </span>
@@ -3070,7 +3068,7 @@ export default function AdminDashboardPage() {
                     <Progress
                       value={
                         systemStats.totalRecordings
-                          ? (systemStats.approvedRecordings / systemStats.totalRecordings) * 100
+                          ? (systemStats.validatedRecordings / systemStats.totalRecordings) * 100
                           : 0
                       }
                       className="h-3"
@@ -3101,8 +3099,8 @@ export default function AdminDashboardPage() {
                       <p className="text-xs text-gray-500">Avg Recording Duration</p>
                     </div>
                     <div className="text-center">
-                      <p className="text-2xl font-bold text-purple-600">{systemStats.averageReviewTime.toFixed(1)}s</p>
-                      <p className="text-xs text-gray-500">Avg Review Time</p>
+                      <p className="text-2xl font-bold text-purple-600">{systemStats.averageValidationTime?.toFixed(1) || 0}s</p>
+                      <p className="text-xs text-gray-500">Avg Validation Time</p>
                     </div>
                   </div>
 
@@ -3114,16 +3112,16 @@ export default function AdminDashboardPage() {
                       <p className="text-xs text-gray-500">Pending Recordings Time</p>
                     </div>
                     <div className="text-center">
-                      <p className="text-2xl font-bold text-red-600">
-                        {formatTime(systemStats.totalRejectedRecordingTime)}
+                      <p className="text-2xl font-bold text-purple-600">
+                        {formatTime(0)} {/* No rejected recordings */}
                       </p>
-                      <p className="text-xs text-gray-500">Rejected Recordings Time</p>
+                      <p className="text-xs text-gray-500">Edited Transcriptions Time</p>
                     </div>
                     <div className="text-center">
                       <p className="text-2xl font-bold text-blue-600">
-                        {formatTime(systemStats.totalApprovedRecordingTime)}
+                        {formatTime(systemStats.totalValidatedRecordingTime || 0)}
                       </p>
-                      <p className="text-xs text-gray-500">Approved Recordings Time</p>
+                      <p className="text-xs text-gray-500">Validated Recordings Time</p>
                     </div>
                     <div className="text-center">
                       <p className="text-2xl font-bold text-green-600">
@@ -3162,11 +3160,11 @@ export default function AdminDashboardPage() {
                               </div>
                               <div className="text-right">
                                 <p className="text-sm font-semibold text-green-600">{stats?.approvedRecordings || 0}</p>
-                                <p className="text-xs text-gray-500">Approved</p>
+                                <p className="text-xs text-gray-500">Validated</p>
                               </div>
                               <div className="text-right">
-                                <p className="text-sm font-semibold text-red-600">{stats?.rejectedRecordings || 0}</p>
-                                <p className="text-xs text-gray-500">Rejected</p>
+                                <p className="text-sm font-semibold text-yellow-600">{stats?.pendingRecordings || 0}</p>
+                                <p className="text-xs text-gray-500">Pending</p>
                               </div>
                             </div>
                           </div>
@@ -3393,9 +3391,9 @@ export default function AdminDashboardPage() {
                       const reviewerStats = getUserStatsById(selectedReview.reviewer_id)
                       return (
                         <>
-                          <p><strong>Total Reviews:</strong> {reviewerStats?.totalReviews || 0}</p>
-                          <p><strong>Approval Rate:</strong> {reviewerStats?.totalReviews ? ((reviewerStats.approvedReviews / reviewerStats.totalReviews) * 100).toFixed(1) : 0}%</p>
-                          <p><strong>Average Review Time:</strong> {reviewerStats?.averageReviewTime.toFixed(1) || 0}s</p>
+                          <p><strong>Total Validations:</strong> {reviewerStats?.totalReviews || 0}</p>
+                          <p><strong>Pass Rate:</strong> {reviewerStats?.totalReviews ? ((reviewerStats.approvedReviews / reviewerStats.totalReviews) * 100).toFixed(1) : 0}%</p>
+                          <p><strong>Average Validation Time:</strong> {reviewerStats?.averageReviewTime.toFixed(1) || 0}s</p>
                           <p><strong>Average Confidence:</strong> {reviewerStats?.accuracyRate.toFixed(1) || 0}%</p>
                         </>
                       )
@@ -3573,7 +3571,7 @@ export default function AdminDashboardPage() {
                             <div className="grid grid-cols-2 gap-4 text-sm">
                               <div className="text-center p-3 bg-white rounded border">
                                 <p className="text-2xl font-bold text-blue-600">{stats?.totalReviews || 0}</p>
-                                <p className="text-xs text-gray-600">Total Reviews</p>
+                                <p className="text-xs text-gray-600">Total Validations</p>
                               </div>
                               <div className="text-center p-3 bg-white rounded border">
                                 <p className="text-2xl font-bold text-purple-600">{stats?.accuracyRate?.toFixed(1) || 0}%</p>
@@ -3581,11 +3579,11 @@ export default function AdminDashboardPage() {
                               </div>
                               <div className="text-center p-3 bg-white rounded border">
                                 <p className="text-2xl font-bold text-green-600">{stats?.approvedReviews || 0}</p>
-                                <p className="text-xs text-gray-600">Approved Reviews</p>
+                                <p className="text-xs text-gray-600">Passed (Correct)</p>
                               </div>
                               <div className="text-center p-3 bg-white rounded border">
                                 <p className="text-2xl font-bold text-orange-600">{stats?.averageReviewTime?.toFixed(1) || 0}s</p>
-                                <p className="text-xs text-gray-600">Avg Review Time</p>
+                                <p className="text-xs text-gray-600">Avg Validation Time</p>
                               </div>
                             </div>
                           )}

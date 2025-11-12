@@ -182,7 +182,7 @@ export default function SignInPage() {
               <Shield className="w-8 h-8 text-white" />
             </div>
             <h1 className="text-3xl font-bold bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent">
-              Common Voice Luo
+              Africa Next Voices
             </h1>
             <p className="text-gray-600 mt-2">Admin Portal</p>
           </div>
@@ -281,7 +281,7 @@ export default function SignInPage() {
               </svg>
             </div>
             <h1 className="text-3xl font-bold bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent">
-              Common Voice Luo
+              Africa Next Voices
             </h1>
             <p className="text-gray-600 mt-2">Welcome back</p>
           </div>
@@ -296,7 +296,7 @@ export default function SignInPage() {
               <Card className="border-0 shadow-2xl bg-white/80 backdrop-blur-sm animate-slide-up">
                 <CardHeader className="text-center pb-6">
                   <CardTitle className="text-2xl font-bold text-gray-900">Enter your email</CardTitle>
-                  <CardDescription className="text-gray-600">Continue to Common Voice Luo</CardDescription>
+                  <CardDescription className="text-gray-600">Continue to Africa Next Voices</CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-4">
                   {error && (
@@ -413,7 +413,7 @@ export default function SignInPage() {
               </svg>
             </div>
             <h1 className="text-3xl font-bold bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent">
-              Common Voice Luo
+              Africa Next Voices
             </h1>
             <p className="text-gray-600 mt-2">Welcome back, {email}</p>
           </div>
@@ -512,7 +512,7 @@ export default function SignInPage() {
               </svg>
             </div>
             <h1 className="text-3xl font-bold bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent">
-              Common Voice Luo
+              Africa Next Voices
             </h1>
             <p className="text-gray-600 mt-2">Select your role</p>
           </div>

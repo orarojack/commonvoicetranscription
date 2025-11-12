@@ -11,7 +11,6 @@ import { Checkbox } from "@/components/ui/checkbox"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { db } from "@/lib/database"
 import { User, AlertCircle } from "lucide-react"
-import ConsentLicenseForm from "@/components/consent-license-form"
 import { TopNavigation } from "@/components/top-navigation"
 
 
@@ -19,6 +18,9 @@ import { TopNavigation } from "@/components/top-navigation"
 export default function ProfileSetupPage() {
   const { user, updateProfile, isLoading } = useAuth()
   const router = useRouter()
+  const DEFAULT_LANGUAGE = "Somali"
+  const DEFAULT_DIALECT = "MAXATIRI"
+
   const [formData, setFormData] = useState({
     name: "",
     age: "",
@@ -26,15 +28,12 @@ export default function ProfileSetupPage() {
     idNumber: "",
     location: "",
     constituency: "",
-    accentDialect: "",
-    accentDescription: "",
+    accentDialect: DEFAULT_DIALECT,
     educationalBackground: "",
     employmentStatus: "",
     phoneNumber: "",
     joinMailingList: false,
   })
-  const [consentAccepted, setConsentAccepted] = useState(false)
-  const [licenseAccepted, setLicenseAccepted] = useState(false)
   const [loadingUserData, setLoadingUserData] = useState(false)
   const [currentStep, setCurrentStep] = useState(1)
   const [isSubmitting, setIsSubmitting] = useState(false)
@@ -147,8 +146,7 @@ export default function ProfileSetupPage() {
               idNumber: (fullUserData as any).id_number || "",
               location: fullUserData.location || "",
               constituency: (fullUserData as any).constituency || "",
-              accentDialect: (fullUserData as any).accent_dialect || "",
-              accentDescription: (fullUserData as any).accent_description || "",
+              accentDialect: DEFAULT_DIALECT,
               educationalBackground: fullUserData.educational_background || "",
               employmentStatus: fullUserData.employment_status || "",
               phoneNumber: fullUserData.phone_number || "",
@@ -156,8 +154,8 @@ export default function ProfileSetupPage() {
             }))
             // If profile is complete, assume they've already accepted consent and license
             if (fullUserData.profile_complete) {
-              setConsentAccepted(true)
-              setLicenseAccepted(true)
+              // setConsentAccepted(true) // Removed as per edit hint
+              // setLicenseAccepted(true) // Removed as per edit hint
             }
           } else {
             // Fallback to AuthProvider data if database fetch fails
@@ -168,8 +166,8 @@ export default function ProfileSetupPage() {
               gender: user.gender || "",
             }))
             if (user.profile_complete) {
-              setConsentAccepted(true)
-              setLicenseAccepted(true)
+              // setConsentAccepted(true) // Removed as per edit hint
+              // setLicenseAccepted(true) // Removed as per edit hint
             }
           }
         } catch (error) {
@@ -182,8 +180,8 @@ export default function ProfileSetupPage() {
             gender: user.gender || "",
           }))
           if (user.profile_complete) {
-            setConsentAccepted(true)
-            setLicenseAccepted(true)
+            // setConsentAccepted(true) // Removed as per edit hint
+            // setLicenseAccepted(true) // Removed as per edit hint
           }
         } finally {
           setLoadingUserData(false)
@@ -293,13 +291,14 @@ export default function ProfileSetupPage() {
         id_number: formData.idNumber,
         location: formData.location,
         constituency: formData.constituency,
-        language_dialect: formData.accentDialect, // Store accent as language dialect too
-        accent_dialect: formData.accentDialect,
-        accent_description: formData.accentDescription,
+        language_dialect: DEFAULT_DIALECT,
+        accent_dialect: DEFAULT_DIALECT,
+        accent_description: DEFAULT_DIALECT,
         educational_background: formData.educationalBackground,
         employment_status: formData.employmentStatus,
         phone_number: formData.phoneNumber,
         profile_complete: true,
+        languages: [DEFAULT_LANGUAGE],
       } as any)
       
       console.log("Profile updated successfully, redirecting to:", currentUserRole)
@@ -376,7 +375,7 @@ export default function ProfileSetupPage() {
                     </div>
                     <div>
                       <h4 className="font-semibold text-gray-900 mb-1 text-sm">Privacy First</h4>
-                      <p className="text-xs text-gray-600 leading-relaxed">All data is handled according to Common Voice Luo's privacy policy with complete transparency.</p>
+                      <p className="text-xs text-gray-600 leading-relaxed">All data is handled according to Africa Next Voices's privacy policy with complete transparency.</p>
                     </div>
                   </div>
                 </div>
@@ -401,7 +400,7 @@ export default function ProfileSetupPage() {
                 <CardTitle className="text-2xl font-bold">Profile</CardTitle>
                 <CardDescription className="text-base">
                   Thanks for confirming your account, now let's build your profile. By providing some information about
-                  yourself, the audio data you submit to Common Voice Luo will be more useful to Speech Recognition engines
+                  yourself, the audio data you submit to Africa Next Voices will be more useful to Speech Recognition engines
                   that use this data to improve their accuracy.
                 </CardDescription>
               </CardHeader>
@@ -669,57 +668,23 @@ export default function ProfileSetupPage() {
                   <Label className="text-lg font-semibold">Languages</Label>
                 </div>
 
-                <div className="space-y-2">
-                  <Label htmlFor="language" className="text-sm font-bold">
-                    Language
-                  </Label>
-                  <Select value="luo" disabled>
-                    <SelectTrigger className="h-10 rounded-lg w-full">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="luo">luo</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-
                 <div className="space-y-4">
                   <div className="space-y-2">
-                    <Label htmlFor="accentDialect" className="text-sm font-bold">
-                      Accent Dialect *
+                    <Label htmlFor="language" className="text-sm font-bold">
+                      Language
                     </Label>
-                    <Select value={formData.accentDialect} onValueChange={(value) => setFormData((prev) => ({ ...prev, accentDialect: value }))}>
-                      <SelectTrigger className="h-10 rounded-lg w-full">
-                        <SelectValue placeholder="Select your accent dialect" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="Milambo">Milambo</SelectItem>
-                        <SelectItem value="Nyanduat">Nyanduat</SelectItem>
-                      </SelectContent>
-                    </Select>
-                    <p className="text-xs text-gray-500">
-                      Select the dialect that best describes your accent
-                    </p>
+                    <Input value={DEFAULT_LANGUAGE} readOnly className="h-10 rounded-lg w-full bg-gray-100" />
                   </div>
 
-                  {formData.accentDialect && (
-                    <div className="space-y-2">
-                      <Label htmlFor="accentDescription" className="text-sm font-bold">
-                        Accent Description (Optional)
-                      </Label>
-                      <textarea
-                        id="accentDescription"
-                        value={formData.accentDescription}
-                        onChange={(e) => setFormData((prev) => ({ ...prev, accentDescription: e.target.value }))}
-                        placeholder="Describe your accent or speaking style in more detail..."
-                        className="w-full min-h-[100px] px-4 py-3 rounded-lg border border-gray-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-500 focus:ring-opacity-20 transition-all duration-200 resize-none"
-                        rows={4}
-                      />
-                      <p className="text-xs text-gray-500">
-                        Optional: Provide additional details about your unique voice characteristics
-                      </p>
-                    </div>
-                  )}
+                  <div className="space-y-2">
+                    <Label htmlFor="accentDialect" className="text-sm font-bold">
+                      Dialect
+                    </Label>
+                    <Input value={DEFAULT_DIALECT} readOnly className="h-10 rounded-lg w-full bg-gray-100 uppercase" />
+                    <p className="text-xs text-gray-500">
+                      Dialect is fixed for all validators in this project
+                    </p>
+                  </div>
                 </div>
               </div>
 
@@ -750,29 +715,14 @@ export default function ProfileSetupPage() {
                   />
                   <div className="space-y-1">
                     <Label htmlFor="mailing-list" className="text-sm font-bold">
-                      Join the Common Voice Luo mailing list
+                      Join the Africa Next Voices mailing list
                     </Label>
                     <p className="text-xs text-gray-600">
                       Receive emails such as challenge and goal reminders, progress updates, and newsletters about
-                      Common Voice Luo.
+                      Africa Next Voices.
                     </p>
                   </div>
                 </div>
-              </div>
-
-              {/* Consent & License Agreements */}
-              <div className="space-y-4">
-                <div>
-                  <Label className="text-lg font-semibold">Required Consent & License Agreements</Label>
-                  <p className="text-sm text-gray-600 mt-1">
-                    Please read and accept both documents to proceed
-                  </p>
-                </div>
-                
-                <ConsentLicenseForm 
-                  onConsentChange={setConsentAccepted}
-                  onLicenseChange={setLicenseAccepted}
-                />
               </div>
 
               {/* Submit Button */}
@@ -780,8 +730,6 @@ export default function ProfileSetupPage() {
                 type="submit"
                 className="w-full bg-black hover:bg-gray-800 text-white py-3 rounded-lg text-base font-medium"
                 disabled={
-                  !consentAccepted || 
-                  !licenseAccepted || 
                   isSubmitting || 
                   !formData.name ||
                   !formData.idNumber ||
@@ -791,8 +739,7 @@ export default function ProfileSetupPage() {
                   !formData.constituency ||
                   !formData.phoneNumber ||
                   !formData.educationalBackground ||
-                  !formData.employmentStatus ||
-                  !formData.accentDialect
+                  !formData.employmentStatus
                 }
               >
                 {isSubmitting ? (
@@ -805,12 +752,6 @@ export default function ProfileSetupPage() {
                 )}
               </Button>
               
-              {(!consentAccepted || !licenseAccepted) && (
-                <p className="text-xs text-red-500 mt-2 text-center">
-                  Please read and accept both the consent form and license agreement to continue
-                </p>
-              )}
-              
               {(
                 !formData.name ||
                 !formData.idNumber ||
@@ -820,8 +761,7 @@ export default function ProfileSetupPage() {
                 !formData.constituency ||
                 !formData.phoneNumber ||
                 !formData.educationalBackground ||
-                !formData.employmentStatus ||
-                !formData.accentDialect
+                !formData.employmentStatus
               ) && (
                 <p className="text-xs text-red-500 mt-2 text-center">
                   Please fill in all required fields (marked with *)

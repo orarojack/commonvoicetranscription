@@ -54,9 +54,8 @@ export function TopNavigation() {
               </div>
               <div>
                 <h1 className="text-xl font-bold bg-gradient-to-r from-gray-900 to-gray-600 bg-clip-text text-transparent">
-                  Common Voice Luo
+                  Africa Next Voices
                 </h1>
-                <p className="text-xs text-gray-500 -mt-1">mozilla</p>
               </div>
             </Link>
           </div>
@@ -136,8 +135,7 @@ export function TopNavigation() {
                       <span className="text-white font-bold text-sm">CV</span>
                     </div>
                     <div>
-                      <h2 className="text-sm font-bold text-gray-900">Common Voice Luo</h2>
-                      <p className="text-xs text-gray-500">mozilla</p>
+                      <h2 className="text-sm font-bold text-gray-900">Africa Next Voices</h2>
                     </div>
                   </div>
                 </div>

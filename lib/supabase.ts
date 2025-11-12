@@ -126,13 +126,17 @@ export type Database = {
           id: string
           user_id: string
           sentence: string
+          original_sentence: string | null
+          transcription_edited: boolean
+          edited_by: string | null
+          edited_at: string | null
           audio_url: string
           audio_blob: string | null
           sentence_mozilla_id: string | null
           contributor_age: string | null
           contributor_gender: string | null
           duration: number
-          status: "pending" | "approved" | "rejected"
+          status: "pending" | "approved"
           reviewed_by: string | null
           reviewed_at: string | null
           created_at: string
@@ -144,13 +148,17 @@ export type Database = {
           id?: string
           user_id: string
           sentence: string
+          original_sentence?: string | null
+          transcription_edited?: boolean
+          edited_by?: string | null
+          edited_at?: string | null
           audio_url: string
           audio_blob?: string | null
           sentence_mozilla_id?: string | null
           contributor_age?: string | null
           contributor_gender?: string | null
           duration: number
-          status?: "pending" | "approved" | "rejected"
+          status?: "pending" | "approved"
           reviewed_by?: string | null
           reviewed_at?: string | null
           created_at?: string
@@ -162,13 +170,17 @@ export type Database = {
           id?: string
           user_id?: string
           sentence?: string
+          original_sentence?: string | null
+          transcription_edited?: boolean
+          edited_by?: string | null
+          edited_at?: string | null
           audio_url?: string
           audio_blob?: string | null
           sentence_mozilla_id?: string | null
           contributor_age?: string | null
           contributor_gender?: string | null
           duration?: number
-          status?: "pending" | "approved" | "rejected"
+          status?: "pending" | "approved"
           reviewed_by?: string | null
           reviewed_at?: string | null
           created_at?: string
@@ -182,7 +194,7 @@ export type Database = {
           id: string
           recording_id: string
           reviewer_id: string
-          decision: "approved" | "rejected"
+          decision: "approved"
           notes: string | null
           confidence: number
           created_at: string
@@ -192,7 +204,7 @@ export type Database = {
           id?: string
           recording_id: string
           reviewer_id: string
-          decision: "approved" | "rejected"
+          decision: "approved"
           notes?: string | null
           confidence: number
           created_at?: string
@@ -202,7 +214,7 @@ export type Database = {
           id?: string
           recording_id?: string
           reviewer_id?: string
-          decision?: "approved" | "rejected"
+          decision?: "approved"
           notes?: string | null
           confidence?: number
           created_at?: string

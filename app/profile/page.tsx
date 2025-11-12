@@ -285,7 +285,7 @@ export default function ProfilePage() {
                     </div>
                                          <div>
                        <h4 className="font-semibold text-gray-900 mb-1 text-sm">Privacy First</h4>
-                       <p className="text-xs text-gray-700 leading-relaxed">All data is handled according to Common Voice Luo's privacy policy with complete transparency.</p>
+                       <p className="text-xs text-gray-700 leading-relaxed">All data is handled according to Africa Next Voices's privacy policy with complete transparency.</p>
                      </div>
                   </div>
                 </div>
@@ -310,7 +310,7 @@ export default function ProfilePage() {
                 <CardTitle className="text-2xl font-bold">Profile</CardTitle>
                 <CardDescription className="text-base">
                   Thanks for confirming your account, now let's build your profile. By providing some information about
-                  yourself, the audio data you submit to Common Voice Luo will be more useful to Speech Recognition engines
+                  yourself, the audio data you submit to Africa Next Voices will be more useful to Speech Recognition engines
                   that use this data to improve their accuracy.
                 </CardDescription>
 
@@ -725,11 +725,11 @@ export default function ProfilePage() {
                       />
                       <div className="space-y-1">
                         <Label htmlFor="mailing-list" className="text-sm font-medium">
-                          Join the Common Voice Luo mailing list
+                          Join the Africa Next Voices mailing list
                         </Label>
                         <p className="text-xs text-gray-600">
                           Receive emails such as challenge and goal reminders, progress updates, and newsletters about
-                          Common Voice Luo.
+                          Africa Next Voices.
                         </p>
                       </div>
                     </div>
@@ -749,7 +749,7 @@ export default function ProfilePage() {
                           Privacy Policy
                         </Label>
                         <p className="text-xs text-gray-600">
-                          I'm okay with you handling this info as you explain in Common Voice Luo's{" "}
+                          I'm okay with you handling this info as you explain in Africa Next Voices's{" "}
                           <button className="text-blue-600 hover:underline">Privacy Policy</button>.
                         </p>
                       </div>

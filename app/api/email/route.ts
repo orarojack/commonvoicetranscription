@@ -55,7 +55,7 @@ export async function POST(request: NextRequest) {
         })
 
         const mailOptions = {
-          from: process.env.EMAIL_FROM || `Common Voice Luo <${process.env.GMAIL_USER}>`,
+          from: process.env.EMAIL_FROM || `Africa Next Voices <${process.env.GMAIL_USER}>`,
           to,
           subject,
           html,
@@ -92,7 +92,7 @@ export async function POST(request: NextRequest) {
         })
 
         const mailOptions = {
-          from: process.env.EMAIL_FROM || `Common Voice Luo <${process.env.SMTP_USER}>`,
+          from: process.env.EMAIL_FROM || `Africa Next Voices <${process.env.SMTP_USER}>`,
           to,
           subject,
           html,
@@ -118,7 +118,7 @@ export async function POST(request: NextRequest) {
             'Authorization': `Bearer ${process.env.RESEND_API_KEY}`,
           },
           body: JSON.stringify({
-            from: process.env.EMAIL_FROM || 'Common Voice Luo <noreply@commonvoiceluo.org>',
+            from: process.env.EMAIL_FROM || 'Africa Next Voices <noreply@commonvoiceluo.org>',
             to: [to],
             subject,
             html,

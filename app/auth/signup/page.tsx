@@ -54,6 +54,19 @@ function SignUpPageContent() {
     }
   }, [searchParams, router])
 
+  // Auto-close modal and redirect after 5 seconds
+  useEffect(() => {
+    if (showReviewerApprovalModal) {
+      const timer = setTimeout(() => {
+        setShowReviewerApprovalModal(false)
+        router.push("/auth/signin")
+      }, 5000) // 5 seconds
+
+      // Cleanup timer if component unmounts or modal is closed manually
+      return () => clearTimeout(timer)
+    }
+  }, [showReviewerApprovalModal, router])
+
   const validateForm = () => {
     if (!email.trim()) {
       setError("Email is required")
@@ -215,7 +228,7 @@ function SignUpPageContent() {
             </svg>
           </div>
           <h1 className="text-3xl font-bold bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent">
-            Common Voice Luo
+            Africa Next Voices
           </h1>
           <p className="text-gray-600 mt-2">Join the voice data revolution</p>
         </div>
@@ -223,7 +236,7 @@ function SignUpPageContent() {
         <Card className="border-0 shadow-2xl bg-white/80 backdrop-blur-sm animate-slide-up">
           <CardHeader className="text-center pb-6">
             <CardTitle className="text-2xl font-bold text-gray-900">Create Account</CardTitle>
-            <CardDescription className="text-gray-600">Join the Common Voice Luo community and help build the future of voice technology</CardDescription>
+            <CardDescription className="text-gray-600">Join the Africa Next Voices community and help build the future of voice technology</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
             {error && (
