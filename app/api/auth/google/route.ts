@@ -84,7 +84,6 @@ export async function POST(request: NextRequest) {
           languages: existingUser.languages,
           location: existingUser.location,
           constituency: existingUser.constituency,
-          language_dialect: existingUser.language_dialect,
           educational_background: existingUser.educational_background,
           employment_status: existingUser.employment_status,
           phone_number: existingUser.phone_number,
@@ -118,13 +117,10 @@ export async function POST(request: NextRequest) {
         languages: profileDataToCopy?.languages || null,
         location: profileDataToCopy?.location || null,
         constituency: profileDataToCopy?.constituency || null,
-        language_dialect: profileDataToCopy?.language_dialect || null,
         educational_background: profileDataToCopy?.educational_background || null,
         employment_status: profileDataToCopy?.employment_status || null,
         phone_number: profileDataToCopy?.phone_number || null,
         id_number: (profileDataToCopy as any)?.id_number || null,
-        accent_dialect: (profileDataToCopy as any)?.accent_dialect || null,
-        accent_description: (profileDataToCopy as any)?.accent_description || null,
         is_active: true,
       } as any)
 
@@ -134,8 +130,6 @@ export async function POST(request: NextRequest) {
         try {
           const customFields: any = {}
           if (profileDataToCopy.id_number) customFields.id_number = profileDataToCopy.id_number
-          if (profileDataToCopy.accent_dialect) customFields.accent_dialect = profileDataToCopy.accent_dialect
-          if (profileDataToCopy.accent_description) customFields.accent_description = profileDataToCopy.accent_description
           
           if (Object.keys(customFields).length > 0) {
             await db.updateUser(newUser.id, customFields)
@@ -159,7 +153,6 @@ export async function POST(request: NextRequest) {
           languages: newUser.languages,
           location: newUser.location,
           constituency: newUser.constituency,
-          language_dialect: newUser.language_dialect,
           educational_background: newUser.educational_background,
           employment_status: newUser.employment_status,
           phone_number: newUser.phone_number,

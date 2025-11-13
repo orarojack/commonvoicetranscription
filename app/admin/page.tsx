@@ -830,7 +830,7 @@ export default function AdminDashboardPage() {
           const newStats = { ...prevStats }
           newStats.totalUsers = newStats.totalUsers - 1
           
-          if (userToDelete.role === "contributor") {
+          if ((userToDelete.role as string) === "contributor") {
             newStats.contributors = newStats.contributors - 1
           } else if (userToDelete.role === "reviewer") {
             newStats.reviewers = newStats.reviewers - 1
@@ -1095,7 +1095,7 @@ export default function AdminDashboardPage() {
       // Prepare CSV data
       const csvData = [
         // Header row
-        ['Name', 'Email', 'Role', 'Status', 'Join Date', 'Profile Complete', 'Age', 'Gender', 'Phone Number', 'Location', 'Educational Background', 'Employment Status', 'Language Dialect', 'Languages', 'Total Recordings', 'Validated Recordings', 'Edited Transcriptions', 'Total Validations', 'Passed', 'Edited', 'Avg Confidence'],
+        ['Name', 'Email', 'Role', 'Status', 'Join Date', 'Profile Complete', 'Age', 'Gender', 'Phone Number', 'Location', 'Educational Background', 'Employment Status', 'Languages', 'Total Recordings', 'Validated Recordings', 'Edited Transcriptions', 'Total Validations', 'Passed', 'Edited', 'Avg Confidence'],
         // Data rows
         ...filteredUsers.map(user => {
           const stats = getUserStatsById(user.id)
@@ -1113,7 +1113,6 @@ export default function AdminDashboardPage() {
             user.location || 'N/A',
             user.educational_background || 'N/A',
             user.employment_status || 'N/A',
-            user.language_dialect || 'N/A',
             user.languages && user.languages.length > 0 ? user.languages.join('; ') : 'N/A',
             stats?.totalRecordings || 0,
             (stats?.approvedRecordings || 0), // Validated recordings
@@ -1448,9 +1447,7 @@ export default function AdminDashboardPage() {
                           variant={
                             recording.status === "approved"
                               ? "default"
-                              : recording.status === "rejected"
-                                ? "destructive"
-                                : "secondary"
+                              : "secondary"
                           }
                         >
                           {recording.status}
@@ -1481,7 +1478,7 @@ export default function AdminDashboardPage() {
               <CardContent>
                 <div className="space-y-4">
                   {users
-                    .filter((u) => u.role === "contributor")
+                    .filter((u) => (u.role as string) === "contributor")
                     .map((user) => {
                       const stats = getUserStatsById(user.id)
                       return { user, stats }
@@ -1621,7 +1618,7 @@ export default function AdminDashboardPage() {
                         </TableCell>
                         <TableCell>
                           <div className="text-sm">
-                            {user.role === "contributor" && (
+                            {(user.role as string) === "contributor" && (
                               <>
                                 <p>{stats?.totalRecordings || 0} recordings</p>
                                 <p className="text-xs text-gray-500">
@@ -1801,9 +1798,7 @@ export default function AdminDashboardPage() {
                             variant={
                               recording.status === "approved"
                                 ? "default"
-                                : recording.status === "rejected"
-                                  ? "destructive"
-                                  : "secondary"
+                                : "secondary"
                             }
                           >
                             {recording.status}
@@ -1924,7 +1919,7 @@ export default function AdminDashboardPage() {
                   {(() => {
                     // Prepare and sort contributors
                     const contributorsData = users
-                      .filter((u) => u.role === "contributor")
+                      .filter((u) => (u.role as string) === "contributor")
                       .map((contributor) => {
                         const stats = getUserStatsById(contributor.id)
                         const contributorRecordings = recordings.filter(r => r.user_id === contributor.id)
@@ -2040,7 +2035,7 @@ export default function AdminDashboardPage() {
 
               {/* Contributors Pagination */}
               {(() => {
-                const contributorsCount = users.filter((u) => u.role === "contributor").length
+                const contributorsCount = users.filter((u) => (u.role as string) === "contributor").length
                 const totalContributorPages = Math.ceil(contributorsCount / contributorsPerPage)
                 const startContributorIndex = (currentContributorPage - 1) * contributorsPerPage
                 const endContributorIndex = Math.min(startContributorIndex + contributorsPerPage, contributorsCount)
@@ -2078,7 +2073,7 @@ export default function AdminDashboardPage() {
                 return null
               })()}
 
-              {users.filter((u) => u.role === "contributor").length === 0 && (
+              {users.filter((u) => (u.role as string) === "contributor").length === 0 && (
                 <div className="text-center py-12">
                   <Users className="h-12 w-12 text-gray-400 mx-auto mb-4" />
                   <p className="text-gray-600">No contributors found</p>
@@ -2306,7 +2301,7 @@ export default function AdminDashboardPage() {
                     <h4 className="text-sm font-semibold mb-3 text-gray-700">Top Contributors</h4>
                     <div className="space-y-2 max-h-80 overflow-y-auto pr-2">
                       {users
-                        .filter((u) => u.role === "contributor")
+                        .filter((u) => (u.role as string) === "contributor")
                         .map((contributor) => {
                           const stats = getUserStatsById(contributor.id)
                           return { contributor, stats }
@@ -2339,7 +2334,7 @@ export default function AdminDashboardPage() {
                             </div>
                           </div>
                         ))}
-                      {users.filter((u) => u.role === "contributor").length === 0 && (
+                      {users.filter((u) => (u.role as string) === "contributor").length === 0 && (
                         <div className="text-center py-8 text-gray-500">
                           <p>No contributors found</p>
                         </div>
@@ -2377,9 +2372,7 @@ export default function AdminDashboardPage() {
                         variant={
                           selectedRecording.status === "approved"
                             ? "default"
-                            : selectedRecording.status === "rejected"
-                              ? "destructive"
-                              : "secondary"
+                            : "secondary"
                         }
                         className="ml-2"
                       >
@@ -2490,7 +2483,7 @@ export default function AdminDashboardPage() {
                         variant={
                           selectedReview.decision === "approved"
                             ? "default"
-                            : "destructive"
+                            : "secondary"
                         }
                         className="ml-2"
                       >
@@ -2522,7 +2515,7 @@ export default function AdminDashboardPage() {
                         variant={
                           selectedReview.decision === "approved"
                             ? "default"
-                            : "destructive"
+                            : "secondary"
                         }
                       >
                         {selectedReview.decision}
@@ -2537,15 +2530,9 @@ export default function AdminDashboardPage() {
                       <span className="font-medium">{selectedReview.time_spent}s</span>
                     </div>
                     {selectedReview.notes && (
-                      <div className={`${
-                        selectedReview.decision === 'rejected' ? 'col-span-2' : ''
-                      }`}>
-                        <span><strong>{selectedReview.decision === 'rejected' ? 'Rejection Reason' : 'Notes'}:</strong></span>
-                        <p className={`mt-1 text-gray-700 rounded p-3 border ${
-                          selectedReview.decision === 'rejected' 
-                            ? 'bg-red-50 border-red-200 font-medium' 
-                            : 'bg-white'
-                        }`}>
+                      <div>
+                        <span><strong>Notes:</strong></span>
+                        <p className="mt-1 text-gray-700 rounded p-3 border bg-white">
                           {selectedReview.notes}
                         </p>
                       </div>
@@ -2689,18 +2676,6 @@ export default function AdminDashboardPage() {
                       <p className="text-gray-600"><strong>Employment Status:</strong></p>
                       <p className="text-gray-900">{selectedUser.employment_status || "Not provided"}</p>
                     </div>
-                    <div>
-                      <p className="text-gray-600"><strong>Language Dialect:</strong></p>
-                      <p className="text-gray-900">{selectedUser.language_dialect || (selectedUser as any).accent_dialect || "Not provided"}</p>
-                    </div>
-                    <div>
-                      <p className="text-gray-600"><strong>Accent Dialect:</strong></p>
-                      <p className="text-gray-900">{(selectedUser as any).accent_dialect || selectedUser.language_dialect || "Not provided"}</p>
-                    </div>
-                    <div className="col-span-2">
-                      <p className="text-gray-600"><strong>Accent Description:</strong></p>
-                      <p className="text-gray-900">{(selectedUser as any).accent_description || "Not provided"}</p>
-                    </div>
                     <div className="col-span-2">
                       <p className="text-gray-600"><strong>Languages:</strong></p>
                       <p className="text-gray-900">
@@ -2720,7 +2695,7 @@ export default function AdminDashboardPage() {
                       const stats = getUserStatsById(selectedUser.id)
                       return (
                         <>
-                          {selectedUser.role === "contributor" && (
+                          {(selectedUser.role as string) === "contributor" && (
                             <div className="grid grid-cols-3 gap-4 text-sm">
                               <div className="text-center p-3 bg-white rounded border">
                                 <p className="text-2xl font-bold text-blue-600">{stats?.totalRecordings || 0}</p>
@@ -2737,7 +2712,7 @@ export default function AdminDashboardPage() {
                             </div>
                           )}
                           
-                          {selectedUser.role === "reviewer" && (
+                          {(selectedUser.role as string) === "reviewer" && (
                             <div className="grid grid-cols-2 gap-4 text-sm">
                               <div className="text-center p-3 bg-white rounded border">
                                 <p className="text-2xl font-bold text-blue-600">{stats?.totalReviews || 0}</p>
@@ -2758,7 +2733,7 @@ export default function AdminDashboardPage() {
                             </div>
                           )}
 
-                          {selectedUser.role === "admin" && (
+                          {(selectedUser.role as string) === "admin" && (
                             <div className="text-center p-4 bg-white rounded border">
                               <p className="text-lg font-semibold text-gray-700">System Administrator</p>
                               <p className="text-sm text-gray-500">Full system access and management privileges</p>
@@ -2771,7 +2746,7 @@ export default function AdminDashboardPage() {
                 </div>
 
                 {/* Recent Activity */}
-                {selectedUser.role === "contributor" && (
+                {(selectedUser.role as string) === "contributor" && (
                   <div className="bg-orange-50 rounded-lg p-4">
                     <h4 className="font-semibold text-sm text-orange-900 mb-3">Recent Recordings</h4>
                     <div className="space-y-2 max-h-40 overflow-y-auto">
@@ -2785,9 +2760,7 @@ export default function AdminDashboardPage() {
                             variant={
                               recording.status === "approved"
                                 ? "default"
-                                : recording.status === "rejected"
-                                  ? "destructive"
-                                  : "secondary"
+                                : "secondary"
                             }
                           >
                             {recording.status}
@@ -2801,7 +2774,7 @@ export default function AdminDashboardPage() {
                   </div>
                 )}
 
-                {selectedUser.role === "reviewer" && (
+                {(selectedUser.role as string) === "reviewer" && (
                   <div className="bg-orange-50 rounded-lg p-4">
                     <h4 className="font-semibold text-sm text-orange-900 mb-3">Recent Reviews</h4>
                     <div className="space-y-2 max-h-40 overflow-y-auto">
@@ -2817,7 +2790,7 @@ export default function AdminDashboardPage() {
                               variant={
                                 review.decision === "approved"
                                   ? "default"
-                                  : "destructive"
+                                  : "secondary"
                               }
                             >
                               {review.decision}

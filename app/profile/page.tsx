@@ -20,6 +20,8 @@ import { db } from "@/lib/database"
 export default function ProfilePage() {
   const { user, updateProfile } = useAuth()
   const router = useRouter()
+  const DEFAULT_LANGUAGE = "Somali"
+
   const [formData, setFormData] = useState({
     name: user?.name || "",
     age: user?.age || "",
@@ -27,9 +29,6 @@ export default function ProfilePage() {
     idNumber: (user as any)?.id_number || "",
     location: user?.location || "",
     constituency: (user as any)?.constituency || "",
-    languageDialect: user?.language_dialect || "",
-    accentDialect: (user as any)?.accent_dialect || "",
-    accentDescription: (user as any)?.accent_description || "",
     educationalBackground: user?.educational_background || "",
     employmentStatus: user?.employment_status || "",
     phoneNumber: user?.phone_number || "",
@@ -38,8 +37,6 @@ export default function ProfilePage() {
     leaderboardVisibility: "visible",
   })
 
-  const [showGenderHelp, setShowGenderHelp] = useState(false)
-  const [showAccentHelp, setShowAccentHelp] = useState(false)
   const [loadingUserData, setLoadingUserData] = useState(false)
   const [validationErrors, setValidationErrors] = useState<{
     idNumber?: string
@@ -64,8 +61,6 @@ export default function ProfilePage() {
             idNumber: (fullUserData as any).id_number || "",
             location: fullUserData.location || "",
             constituency: (fullUserData as any).constituency || "",
-            accentDialect: (fullUserData as any).accent_dialect || "",
-            accentDescription: (fullUserData as any).accent_description || "",
             educationalBackground: fullUserData.educational_background || "",
             employmentStatus: fullUserData.employment_status || "",
             phoneNumber: fullUserData.phone_number || "",
@@ -183,9 +178,6 @@ export default function ProfilePage() {
       id_number: formData.idNumber,
       location: formData.location,
       constituency: formData.constituency,
-      language_dialect: formData.languageDialect,
-      accent_dialect: formData.accentDialect,
-      accent_description: formData.accentDescription,
       educational_background: formData.educationalBackground,
       employment_status: formData.employmentStatus,
       phone_number: formData.phoneNumber,
@@ -199,12 +191,7 @@ export default function ProfilePage() {
         id_number: formData.idNumber,
         location: formData.location,
         constituency: formData.constituency,
-        language_dialect: formData.languageDialect,
-        accent_dialect: formData.accentDialect,
-        accent_description: formData.accentDescription,
-        educational_background: formData.educationalBackground,
-        employment_status: formData.employmentStatus,
-        phone_number: formData.phoneNumber,
+        languages: [DEFAULT_LANGUAGE],
         profile_complete: true,
       } as any)
       console.log("Profile updated successfully")
@@ -317,17 +304,11 @@ export default function ProfilePage() {
                 <Button
                   variant="ghost"
                   className="text-blue-600 hover:text-blue-700 p-0 h-auto justify-start"
-                  onClick={() => setShowGenderHelp(!showGenderHelp)}
                 >
                   Why does this matter? <ChevronDown className="ml-1 h-4 w-4" />
                 </Button>
 
-                {showGenderHelp && (
-                  <div className="bg-blue-50 p-4 rounded-lg text-sm text-blue-800">
-                    This information helps improve the accuracy of speech recognition systems by providing diverse
-                    training data.
-                  </div>
-                )}
+                {/* Removed showGenderHelp and showAccentHelp */}
               </CardHeader>
 
               <CardContent>
@@ -433,14 +414,7 @@ export default function ProfilePage() {
                     </div>
                   </div>
 
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    className="text-blue-600 hover:text-blue-700 p-0 h-auto"
-                    onClick={() => setShowGenderHelp(!showGenderHelp)}
-                  >
-                    Need help with the Sex or Gender changes? <ChevronDown className="ml-1 h-4 w-4" />
-                  </Button>
+                  {/* Removed showGenderHelp button */}
 
                   {/* Demographics Section */}
                   <div className="space-y-6">
@@ -561,23 +535,12 @@ export default function ProfilePage() {
                       </div>
                     </div>
 
-                    {/* Language Dialect and Educational Background */}
+                    {/* Language and Educational Background */}
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                       <div className="space-y-2">
-                        <Label htmlFor="languageDialect" className="text-sm font-medium">
-                          Language Dialect
-                        </Label>
-                        <Select value={formData.languageDialect} onValueChange={(value) => setFormData((prev) => ({ ...prev, languageDialect: value, accentDialect: value }))}>
-                          <SelectTrigger className="h-10 rounded-lg w-full">
-                            <SelectValue placeholder="Select your dialect" />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="Milambo">Milambo</SelectItem>
-                            <SelectItem value="Nyanduat">Nyanduat</SelectItem>
-                          </SelectContent>
-                        </Select>
+                        <Label className="text-sm font-medium">Language</Label>
+                        <Input value={DEFAULT_LANGUAGE} readOnly className="h-10 rounded-lg w-full bg-gray-100" />
                       </div>
-
                       <div className="space-y-2">
                         <Label htmlFor="educationalBackground" className="text-sm font-medium">
                           Educational Background
@@ -626,76 +589,10 @@ export default function ProfilePage() {
                       <Label htmlFor="language" className="text-sm font-medium">
                         Language
                       </Label>
-                      <Select value="luo" disabled>
-                        <SelectTrigger className="h-10 rounded-lg w-full">
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="luo">luo</SelectItem>
-                        </SelectContent>
-                      </Select>
+                      <Input value={DEFAULT_LANGUAGE} readOnly className="h-10 rounded-lg w-full bg-gray-100" />
                     </div>
 
-                    <div className="space-y-4">
-                      <div className="space-y-2">
-                        <Label htmlFor="accentDialect" className="text-sm font-medium">
-                          Accent Dialect *
-                        </Label>
-                        <Select value={formData.accentDialect} onValueChange={(value) => setFormData((prev) => ({ ...prev, accentDialect: value, languageDialect: value }))}>
-                          <SelectTrigger className="h-10 rounded-lg w-full">
-                            <SelectValue placeholder="Select your accent dialect" />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="Milambo">Milambo</SelectItem>
-                            <SelectItem value="Nyanduat">Nyanduat</SelectItem>
-                          </SelectContent>
-                        </Select>
-                        <p className="text-xs text-gray-500">
-                          Select the dialect that best describes your accent
-                        </p>
-                      </div>
-
-                      {formData.accentDialect && (
-                        <div className="space-y-2">
-                          <Label htmlFor="accentDescription" className="text-sm font-medium">
-                            Accent Description (Optional)
-                          </Label>
-                          <Textarea
-                            id="accentDescription"
-                            value={formData.accentDescription}
-                            onChange={(e) => setFormData((prev) => ({ ...prev, accentDescription: e.target.value }))}
-                            placeholder="Describe your accent or speaking style in more detail..."
-                            className="min-h-[100px] rounded-lg"
-                          />
-                          <p className="text-xs text-gray-500">
-                            Optional: Provide additional details about your unique voice characteristics
-                          </p>
-                        </div>
-                      )}
-
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        className="text-blue-600 hover:text-blue-700 p-0 h-auto"
-                        onClick={() => setShowAccentHelp(!showAccentHelp)}
-                      >
-                        Need some help with accent? <ChevronDown className="ml-1 h-4 w-4" />
-                      </Button>
-
-                      {showAccentHelp && (
-                        <div className="bg-blue-50 p-4 rounded-lg text-sm text-blue-800">
-                          <p className="mb-2">Describe your accent to help improve speech recognition accuracy. Consider:</p>
-                          <ul className="list-disc list-inside space-y-1">
-                            <li>Regional variations in pronunciation</li>
-                            <li>Influence from other languages you speak</li>
-                            <li>Any speech patterns or characteristics</li>
-                            <li>Educational or professional background</li>
-                          </ul>
-                        </div>
-                      )}
-                    </div>
-
-
+                    {/* Dialect selection removed from UI */}
                   </div>
 
                   {/* Email Section */}

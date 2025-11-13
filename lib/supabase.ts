@@ -58,13 +58,10 @@ export type Database = {
           languages: string[] | null
           location: string | null
           constituency: string | null
-          language_dialect: string | null
           educational_background: string | null
           employment_status: string | null
           phone_number: string | null
           id_number: string | null
-          accent_dialect: string | null
-          accent_description: string | null
           created_at: string
           updated_at: string
           last_login_at: string | null
@@ -83,13 +80,10 @@ export type Database = {
           languages?: string[] | null
           location?: string | null
           constituency?: string | null
-          language_dialect?: string | null
           educational_background?: string | null
           employment_status?: string | null
           phone_number?: string | null
           id_number?: string | null
-          accent_dialect?: string | null
-          accent_description?: string | null
           created_at?: string
           updated_at?: string
           last_login_at?: string | null
@@ -108,13 +102,10 @@ export type Database = {
           languages?: string[] | null
           location?: string | null
           constituency?: string | null
-          language_dialect?: string | null
           educational_background?: string | null
           employment_status?: string | null
           phone_number?: string | null
           id_number?: string | null
-          accent_dialect?: string | null
-          accent_description?: string | null
           created_at?: string
           updated_at?: string
           last_login_at?: string | null

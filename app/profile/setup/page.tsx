@@ -19,7 +19,6 @@ export default function ProfileSetupPage() {
   const { user, updateProfile, isLoading } = useAuth()
   const router = useRouter()
   const DEFAULT_LANGUAGE = "Somali"
-  const DEFAULT_DIALECT = "MAXATIRI"
 
   const [formData, setFormData] = useState({
     name: "",
@@ -28,7 +27,6 @@ export default function ProfileSetupPage() {
     idNumber: "",
     location: "",
     constituency: "",
-    accentDialect: DEFAULT_DIALECT,
     educationalBackground: "",
     employmentStatus: "",
     phoneNumber: "",
@@ -146,7 +144,6 @@ export default function ProfileSetupPage() {
               idNumber: (fullUserData as any).id_number || "",
               location: fullUserData.location || "",
               constituency: (fullUserData as any).constituency || "",
-              accentDialect: DEFAULT_DIALECT,
               educationalBackground: fullUserData.educational_background || "",
               employmentStatus: fullUserData.employment_status || "",
               phoneNumber: fullUserData.phone_number || "",
@@ -291,9 +288,6 @@ export default function ProfileSetupPage() {
         id_number: formData.idNumber,
         location: formData.location,
         constituency: formData.constituency,
-        language_dialect: DEFAULT_DIALECT,
-        accent_dialect: DEFAULT_DIALECT,
-        accent_description: DEFAULT_DIALECT,
         educational_background: formData.educationalBackground,
         employment_status: formData.employmentStatus,
         phone_number: formData.phoneNumber,
@@ -668,23 +662,11 @@ export default function ProfileSetupPage() {
                   <Label className="text-lg font-semibold">Languages</Label>
                 </div>
 
-                <div className="space-y-4">
-                  <div className="space-y-2">
-                    <Label htmlFor="language" className="text-sm font-bold">
-                      Language
-                    </Label>
-                    <Input value={DEFAULT_LANGUAGE} readOnly className="h-10 rounded-lg w-full bg-gray-100" />
-                  </div>
-
-                  <div className="space-y-2">
-                    <Label htmlFor="accentDialect" className="text-sm font-bold">
-                      Dialect
-                    </Label>
-                    <Input value={DEFAULT_DIALECT} readOnly className="h-10 rounded-lg w-full bg-gray-100 uppercase" />
-                    <p className="text-xs text-gray-500">
-                      Dialect is fixed for all validators in this project
-                    </p>
-                  </div>
+                <div className="space-y-2">
+                  <Label htmlFor="language" className="text-sm font-bold">
+                    Language
+                  </Label>
+                  <Input value={DEFAULT_LANGUAGE} readOnly className="h-10 rounded-lg w-full bg-gray-100" />
                 </div>
               </div>
 

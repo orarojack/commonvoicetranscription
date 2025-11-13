@@ -3,6 +3,8 @@ import { RecordingUploadData, MozillaRecordingMetadata } from '@/lib/mozilla-api
 import { mozillaUpload } from '@/lib/mozilla-upload-server'
 import { db } from '@/lib/database'
 
+const DEFAULT_ACCENT = 'MAXATIRI'
+
 // POST /api/mozilla/upload - Upload approved recording to Mozilla bucket
 export async function POST(request: NextRequest) {
   try {
@@ -66,7 +68,7 @@ export async function POST(request: NextRequest) {
     const metadata: MozillaRecordingMetadata = {
       age: user.age ? mozillaUpload.convertAgeToMozillaFormat(user.age) : '',
       gender: user.gender ? mozillaUpload.convertGenderToMozillaFormat(user.gender) : '',
-      accent: (user as any).accent_dialect || '',
+      accent: DEFAULT_ACCENT,
       sentenceDomain: 'general', // Default domain - you can customize this
     }
 
@@ -143,7 +145,7 @@ export async function PUT(request: NextRequest) {
           const metadata: MozillaRecordingMetadata = {
             age: user.age ? mozillaUpload.convertAgeToMozillaFormat(user.age) : '',
             gender: user.gender ? mozillaUpload.convertGenderToMozillaFormat(user.gender) : '',
-            accent: (user as any).accent_dialect || '',
+            accent: DEFAULT_ACCENT,
             sentenceDomain: 'general',
           }
 
@@ -235,7 +237,7 @@ export async function PUT(request: NextRequest) {
         const metadata: MozillaRecordingMetadata = {
           age: user.age ? mozillaUpload.convertAgeToMozillaFormat(user.age) : '',
           gender: user.gender ? mozillaUpload.convertGenderToMozillaFormat(user.gender) : '',
-          accent: (user as any).accent_dialect || '',
+          accent: DEFAULT_ACCENT,
           sentenceDomain: 'general',
         }
 
