@@ -1402,12 +1402,12 @@ export default function AdminDashboardPage() {
 
       {/* Main Content Tabs */}
       <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-6">
-        <TabsList className="grid w-full grid-cols-5">
-          <TabsTrigger value="overview">Overview</TabsTrigger>
-          <TabsTrigger value="users">User Management</TabsTrigger>
-          <TabsTrigger value="recordings">Recordings</TabsTrigger>
-          <TabsTrigger value="contributors">Contributors</TabsTrigger>
-          <TabsTrigger value="analytics">Analytics</TabsTrigger>
+        <TabsList className="grid w-full gap-2 sm:grid-cols-2 lg:grid-cols-5">
+          <TabsTrigger value="overview" className="w-full">Overview</TabsTrigger>
+          <TabsTrigger value="users" className="w-full">User Management</TabsTrigger>
+          <TabsTrigger value="recordings" className="w-full">Recordings</TabsTrigger>
+          <TabsTrigger value="contributors" className="w-full">Contributors</TabsTrigger>
+          <TabsTrigger value="analytics" className="w-full">Analytics</TabsTrigger>
         </TabsList>
 
         {/* Overview Tab */}
@@ -1522,8 +1522,8 @@ export default function AdminDashboardPage() {
               </CardDescription>
             </CardHeader>
             <CardContent>
-              <div className="flex items-center space-x-2 mb-4">
-                <div className="relative flex-1">
+              <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between mb-4">
+                <div className="relative w-full lg:max-w-sm">
                   <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
                   <Input
                     placeholder="Search users..."
@@ -1532,40 +1532,43 @@ export default function AdminDashboardPage() {
                     className="pl-8"
                   />
                 </div>
-                <Button
-                  onClick={handleExportUsers}
-                  variant="outline"
-                  size="sm"
-                  className="flex items-center space-x-2"
-                >
-                  <Download className="h-4 w-4" />
-                  <span>Export Users</span>
-                </Button>
-                <Select value={filterRole} onValueChange={setFilterRole}>
-                  <SelectTrigger className="w-[140px]">
-                    <SelectValue placeholder="Role" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="all">All Roles</SelectItem>
-                    <SelectItem value="contributor">Contributors</SelectItem>
-                    <SelectItem value="reviewer">Reviewers</SelectItem>
-                    <SelectItem value="admin">Admins</SelectItem>
-                  </SelectContent>
-                </Select>
-                <Select value={filterStatus} onValueChange={setFilterStatus}>
-                  <SelectTrigger className="w-[140px]">
-                    <SelectValue placeholder="Status" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="all">All Status</SelectItem>
-                    <SelectItem value="active">Active</SelectItem>
-                    <SelectItem value="pending">Pending</SelectItem>
-                    <SelectItem value="rejected">Rejected</SelectItem>
-                  </SelectContent>
-                </Select>
+                <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center sm:gap-3 w-full lg:justify-end">
+                  <Button
+                    onClick={handleExportUsers}
+                    variant="outline"
+                    size="sm"
+                    className="w-full sm:w-auto flex items-center justify-center gap-2"
+                  >
+                    <Download className="h-4 w-4" />
+                    <span>Export Users</span>
+                  </Button>
+                  <Select value={filterRole} onValueChange={setFilterRole}>
+                    <SelectTrigger className="w-full sm:w-[160px]">
+                      <SelectValue placeholder="Role" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All Roles</SelectItem>
+                      <SelectItem value="contributor">Contributors</SelectItem>
+                      <SelectItem value="reviewer">Reviewers</SelectItem>
+                      <SelectItem value="admin">Admins</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <Select value={filterStatus} onValueChange={setFilterStatus}>
+                    <SelectTrigger className="w-full sm:w-[160px]">
+                      <SelectValue placeholder="Status" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All Status</SelectItem>
+                      <SelectItem value="active">Active</SelectItem>
+                      <SelectItem value="pending">Pending</SelectItem>
+                      <SelectItem value="rejected">Rejected</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
               </div>
 
-              <Table>
+              <div className="overflow-x-auto -mx-4 sm:mx-0">
+                <Table className="min-w-[780px]">
                 <TableHeader>
                   <TableRow>
                     <TableHead>User</TableHead>
@@ -1680,7 +1683,8 @@ export default function AdminDashboardPage() {
                     )
                   })}
                 </TableBody>
-              </Table>
+                </Table>
+              </div>
               
               {/* Users Pagination */}
               {totalUserPages > 1 && (
@@ -1733,8 +1737,8 @@ export default function AdminDashboardPage() {
               </CardDescription>
             </CardHeader>
             <CardContent>
-              <div className="flex items-center space-x-2 mb-4">
-                <div className="relative flex-1">
+              <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between mb-4">
+                <div className="relative w-full lg:max-w-md">
                   <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
                   <Input
                     placeholder="Search recordings by sentence or contributor..."
@@ -1743,29 +1747,32 @@ export default function AdminDashboardPage() {
                     className="pl-8"
                   />
                 </div>
-                <Select value={filterStatus} onValueChange={setFilterStatus}>
-                  <SelectTrigger className="w-[140px]">
-                    <SelectValue placeholder="Status" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="all">All Status</SelectItem>
-                    <SelectItem value="pending">Pending</SelectItem>
-                    <SelectItem value="approved">Approved</SelectItem>
-                    <SelectItem value="reviewed">Validated</SelectItem>
-                  </SelectContent>
-                </Select>
-                <Button
-                  onClick={handleExportRecordings}
-                  variant="outline"
-                  size="sm"
-                  className="flex items-center space-x-2"
-                >
-                  <Download className="h-4 w-4" />
-                  <span>Export to Excel</span>
-                </Button>
+                <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center sm:gap-3 w-full lg:justify-end">
+                  <Select value={filterStatus} onValueChange={setFilterStatus}>
+                    <SelectTrigger className="w-full sm:w-[160px]">
+                      <SelectValue placeholder="Status" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All Status</SelectItem>
+                      <SelectItem value="pending">Pending</SelectItem>
+                      <SelectItem value="approved">Approved</SelectItem>
+                      <SelectItem value="reviewed">Validated</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <Button
+                    onClick={handleExportRecordings}
+                    variant="outline"
+                    size="sm"
+                    className="w-full sm:w-auto flex items-center justify-center gap-2"
+                  >
+                    <Download className="h-4 w-4" />
+                    <span>Export to Excel</span>
+                  </Button>
+                </div>
               </div>
               
-              <Table>
+              <div className="overflow-x-auto -mx-4 sm:mx-0">
+                <Table className="min-w-[900px]">
                 <TableHeader>
                   <TableRow>
                     <TableHead>Contributor</TableHead>
@@ -1843,7 +1850,8 @@ export default function AdminDashboardPage() {
                     )
                   })}
                 </TableBody>
-              </Table>
+                </Table>
+              </div>
               
               {/* Recordings Pagination */}
               {totalRecordingPages > 1 && (
@@ -1895,7 +1903,7 @@ export default function AdminDashboardPage() {
             </CardHeader>
             <CardContent>
               <div className="mb-4 p-4 bg-blue-50 border border-blue-200 rounded-lg">
-                <div className="flex items-center space-x-2">
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-3">
                   <div className="w-3 h-3 bg-green-500 rounded-full"></div>
                   <span className="text-sm text-blue-800">
                     <span className="font-semibold">Green indicator:</span> Contributors who have reached 1 hour or more of approved recording time
@@ -1903,7 +1911,8 @@ export default function AdminDashboardPage() {
                 </div>
               </div>
 
-              <Table>
+              <div className="overflow-x-auto -mx-4 sm:mx-0">
+                <Table className="min-w-[820px]">
                 <TableHeader>
                   <TableRow>
                     <TableHead>Contributor</TableHead>
@@ -2031,7 +2040,8 @@ export default function AdminDashboardPage() {
                     )
                   })()}
                 </TableBody>
-              </Table>
+                </Table>
+              </div>
 
               {/* Contributors Pagination */}
               {(() => {

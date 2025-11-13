@@ -18,7 +18,8 @@ import { TopNavigation } from "@/components/top-navigation"
 export default function ProfileSetupPage() {
   const { user, updateProfile, isLoading } = useAuth()
   const router = useRouter()
-  const DEFAULT_LANGUAGE = "Somali"
+  const LANGUAGE_OPTIONS = ["Somali", "Kikuyu"] as const
+  const DEFAULT_LANGUAGE = LANGUAGE_OPTIONS[0]
 
   const [formData, setFormData] = useState({
     name: "",
@@ -30,6 +31,7 @@ export default function ProfileSetupPage() {
     educationalBackground: "",
     employmentStatus: "",
     phoneNumber: "",
+    language: DEFAULT_LANGUAGE,
     joinMailingList: false,
   })
   const [loadingUserData, setLoadingUserData] = useState(false)
@@ -147,6 +149,10 @@ export default function ProfileSetupPage() {
               educationalBackground: fullUserData.educational_background || "",
               employmentStatus: fullUserData.employment_status || "",
               phoneNumber: fullUserData.phone_number || "",
+              language:
+                fullUserData.languages && fullUserData.languages.length > 0
+                  ? fullUserData.languages[0]
+                  : DEFAULT_LANGUAGE,
               joinMailingList: false,
             }))
             // If profile is complete, assume they've already accepted consent and license
@@ -161,6 +167,8 @@ export default function ProfileSetupPage() {
               name: user.name || "",
               age: user.age || "",
               gender: user.gender || "",
+              language:
+                user.languages && user.languages.length > 0 ? user.languages[0] : DEFAULT_LANGUAGE,
             }))
             if (user.profile_complete) {
               // setConsentAccepted(true) // Removed as per edit hint
@@ -292,7 +300,7 @@ export default function ProfileSetupPage() {
         employment_status: formData.employmentStatus,
         phone_number: formData.phoneNumber,
         profile_complete: true,
-        languages: [DEFAULT_LANGUAGE],
+        languages: [formData.language || DEFAULT_LANGUAGE],
       } as any)
       
       console.log("Profile updated successfully, redirecting to:", currentUserRole)
@@ -666,7 +674,21 @@ export default function ProfileSetupPage() {
                   <Label htmlFor="language" className="text-sm font-bold">
                     Language
                   </Label>
-                  <Input value={DEFAULT_LANGUAGE} readOnly className="h-10 rounded-lg w-full bg-gray-100" />
+                <Select
+                  value={formData.language}
+                  onValueChange={(value) => setFormData((prev) => ({ ...prev, language: value }))}
+                >
+                  <SelectTrigger className="h-10 rounded-lg w-full">
+                    <SelectValue placeholder="Select your language" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {LANGUAGE_OPTIONS.map((language) => (
+                      <SelectItem key={language} value={language}>
+                        {language}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
                 </div>
               </div>
 

@@ -20,7 +20,8 @@ import { db } from "@/lib/database"
 export default function ProfilePage() {
   const { user, updateProfile } = useAuth()
   const router = useRouter()
-  const DEFAULT_LANGUAGE = "Somali"
+  const LANGUAGE_OPTIONS = ["Somali", "Kikuyu"] as const
+  const DEFAULT_LANGUAGE = LANGUAGE_OPTIONS[0]
 
   const [formData, setFormData] = useState({
     name: user?.name || "",
@@ -32,6 +33,7 @@ export default function ProfilePage() {
     educationalBackground: user?.educational_background || "",
     employmentStatus: user?.employment_status || "",
     phoneNumber: user?.phone_number || "",
+    language: user?.languages && user.languages.length > 0 ? user.languages[0] : DEFAULT_LANGUAGE,
     joinMailingList: false,
     acceptPrivacy: true,
     leaderboardVisibility: "visible",
@@ -64,6 +66,10 @@ export default function ProfilePage() {
             educationalBackground: fullUserData.educational_background || "",
             employmentStatus: fullUserData.employment_status || "",
             phoneNumber: fullUserData.phone_number || "",
+            language:
+              fullUserData.languages && fullUserData.languages.length > 0
+                ? fullUserData.languages[0]
+                : DEFAULT_LANGUAGE,
           }))
         }
       } catch (error) {
@@ -181,6 +187,7 @@ export default function ProfilePage() {
       educational_background: formData.educationalBackground,
       employment_status: formData.employmentStatus,
       phone_number: formData.phoneNumber,
+        language: formData.language,
     })
     
     try {
@@ -191,7 +198,7 @@ export default function ProfilePage() {
         id_number: formData.idNumber,
         location: formData.location,
         constituency: formData.constituency,
-        languages: [DEFAULT_LANGUAGE],
+          languages: [formData.language || DEFAULT_LANGUAGE],
         profile_complete: true,
       } as any)
       console.log("Profile updated successfully")
@@ -539,7 +546,21 @@ export default function ProfilePage() {
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                       <div className="space-y-2">
                         <Label className="text-sm font-medium">Language</Label>
-                        <Input value={DEFAULT_LANGUAGE} readOnly className="h-10 rounded-lg w-full bg-gray-100" />
+                        <Select
+                          value={formData.language}
+                          onValueChange={(value) => setFormData((prev) => ({ ...prev, language: value }))}
+                        >
+                          <SelectTrigger className="h-10 rounded-lg w-full">
+                            <SelectValue placeholder="Select your language" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {LANGUAGE_OPTIONS.map((language) => (
+                              <SelectItem key={language} value={language}>
+                                {language}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
                       </div>
                       <div className="space-y-2">
                         <Label htmlFor="educationalBackground" className="text-sm font-medium">
@@ -589,7 +610,21 @@ export default function ProfilePage() {
                       <Label htmlFor="language" className="text-sm font-medium">
                         Language
                       </Label>
-                      <Input value={DEFAULT_LANGUAGE} readOnly className="h-10 rounded-lg w-full bg-gray-100" />
+                      <Select
+                        value={formData.language}
+                        onValueChange={(value) => setFormData((prev) => ({ ...prev, language: value }))}
+                      >
+                        <SelectTrigger className="h-10 rounded-lg w-full">
+                          <SelectValue placeholder="Select your language" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {LANGUAGE_OPTIONS.map((language) => (
+                            <SelectItem key={language} value={language}>
+                              {language}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
                     </div>
 
                     {/* Dialect selection removed from UI */}
