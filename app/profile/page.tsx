@@ -17,11 +17,21 @@ import { ChevronDown, AlertCircle } from "lucide-react"
 import { useRouter } from "next/navigation"
 import { db } from "@/lib/database"
 
+// Language and Dialect mappings
+const LANGUAGE_DIALECTS: Record<string, string[]> = {
+  "Somali": ["Maxatiri"],
+  "Luo": ["Nyanduat", "Milambo"],
+  "Maasai": ["Maasai", "Samburu"],
+  "Kalenjin": ["Nandi", "Kipsigis"],
+  "Kikuyu": ["KI-NDIA", "GI-GICHUGU", "GI-KABETE", "KI-MURANGA", "KI-MATHIRA"]
+}
+
+const LANGUAGE_OPTIONS = Object.keys(LANGUAGE_DIALECTS) as const
+const DEFAULT_LANGUAGE = LANGUAGE_OPTIONS[0]
+
 export default function ProfilePage() {
   const { user, updateProfile } = useAuth()
   const router = useRouter()
-  const LANGUAGE_OPTIONS = ["Somali", "Kikuyu"] as const
-  const DEFAULT_LANGUAGE = LANGUAGE_OPTIONS[0]
 
   const [formData, setFormData] = useState({
     name: user?.name || "",
@@ -34,6 +44,7 @@ export default function ProfilePage() {
     employmentStatus: user?.employment_status || "",
     phoneNumber: user?.phone_number || "",
     language: user?.languages && user.languages.length > 0 ? user.languages[0] : DEFAULT_LANGUAGE,
+    dialect: "",
     joinMailingList: false,
     acceptPrivacy: true,
     leaderboardVisibility: "visible",
@@ -70,6 +81,7 @@ export default function ProfilePage() {
               fullUserData.languages && fullUserData.languages.length > 0
                 ? fullUserData.languages[0]
                 : DEFAULT_LANGUAGE,
+            dialect: (fullUserData as any).language_dialect || (fullUserData as any).accent_dialect || "",
           }))
         }
       } catch (error) {
@@ -144,6 +156,21 @@ export default function ProfilePage() {
     setFormData((prev) => ({ ...prev, location: value, constituency: "" }))
   }
 
+  // Handle language change - reset dialect when language changes
+  const handleLanguageChange = (value: string) => {
+    const dialects = LANGUAGE_DIALECTS[value] || []
+    setFormData((prev) => ({ 
+      ...prev, 
+      language: value, 
+      dialect: dialects.length > 0 ? dialects[0] : "" 
+    }))
+  }
+
+  // Get available dialects for selected language
+  const getAvailableDialects = () => {
+    return LANGUAGE_DIALECTS[formData.language] || []
+  }
+
   // Validate unique fields
   const validateUniqueFields = async (): Promise<boolean> => {
     const errors: { idNumber?: string; phoneNumber?: string } = {}
@@ -199,6 +226,8 @@ export default function ProfilePage() {
         location: formData.location,
         constituency: formData.constituency,
           languages: [formData.language || DEFAULT_LANGUAGE],
+        language_dialect: formData.dialect || null,
+        accent_dialect: formData.dialect || null,
         profile_complete: true,
       } as any)
       console.log("Profile updated successfully")
@@ -542,13 +571,13 @@ export default function ProfilePage() {
                       </div>
                     </div>
 
-                    {/* Language and Educational Background */}
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    {/* Language, Dialect and Educational Background */}
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                       <div className="space-y-2">
-                        <Label className="text-sm font-medium">Language</Label>
+                        <Label className="text-sm font-medium">Language *</Label>
                         <Select
                           value={formData.language}
-                          onValueChange={(value) => setFormData((prev) => ({ ...prev, language: value }))}
+                          onValueChange={handleLanguageChange}
                         >
                           <SelectTrigger className="h-10 rounded-lg w-full">
                             <SelectValue placeholder="Select your language" />
@@ -561,6 +590,28 @@ export default function ProfilePage() {
                             ))}
                           </SelectContent>
                         </Select>
+                      </div>
+                      <div className="space-y-2">
+                        <Label className="text-sm font-medium">Dialect *</Label>
+                        <Select
+                          value={formData.dialect}
+                          onValueChange={(value) => setFormData((prev) => ({ ...prev, dialect: value }))}
+                          disabled={!formData.language || getAvailableDialects().length === 0}
+                        >
+                          <SelectTrigger className="h-10 rounded-lg w-full disabled:opacity-50">
+                            <SelectValue placeholder={formData.language ? "Select dialect" : "Select language first"} />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {getAvailableDialects().map((dialect) => (
+                              <SelectItem key={dialect} value={dialect}>
+                                {dialect}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                        {formData.language && getAvailableDialects().length === 0 && (
+                          <p className="text-xs text-amber-600">No dialects available for this language</p>
+                        )}
                       </div>
                       <div className="space-y-2">
                         <Label htmlFor="educationalBackground" className="text-sm font-medium">
@@ -600,35 +651,6 @@ export default function ProfilePage() {
                     </div>
                   </div>
 
-                  {/* Languages Section */}
-                  <div className="space-y-4">
-                    <div>
-                      <Label className="text-lg font-semibold">Languages</Label>
-                    </div>
-
-                    <div className="space-y-2">
-                      <Label htmlFor="language" className="text-sm font-medium">
-                        Language
-                      </Label>
-                      <Select
-                        value={formData.language}
-                        onValueChange={(value) => setFormData((prev) => ({ ...prev, language: value }))}
-                      >
-                        <SelectTrigger className="h-10 rounded-lg w-full">
-                          <SelectValue placeholder="Select your language" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {LANGUAGE_OPTIONS.map((language) => (
-                            <SelectItem key={language} value={language}>
-                              {language}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    </div>
-
-                    {/* Dialect selection removed from UI */}
-                  </div>
 
                   {/* Email Section */}
                   <div className="space-y-2">

@@ -460,6 +460,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       if ((profile as any).educational_background !== undefined) dbProfile.educational_background = (profile as any).educational_background
       if ((profile as any).employment_status !== undefined) dbProfile.employment_status = (profile as any).employment_status
       if ((profile as any).languages !== undefined) dbProfile.languages = (profile as any).languages
+      if ((profile as any).language_dialect !== undefined) dbProfile.language_dialect = (profile as any).language_dialect
+      if ((profile as any).accent_dialect !== undefined) dbProfile.accent_dialect = (profile as any).accent_dialect
 
       console.log("updateProfile - User ID:", user.id)
       console.log("updateProfile - Profile data:", dbProfile)

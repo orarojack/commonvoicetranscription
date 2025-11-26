@@ -126,6 +126,7 @@ export type Database = {
           sentence_mozilla_id: string | null
           contributor_age: string | null
           contributor_gender: string | null
+          language: string | null
           duration: number
           status: "pending" | "approved"
           reviewed_by: string | null
@@ -148,6 +149,7 @@ export type Database = {
           sentence_mozilla_id?: string | null
           contributor_age?: string | null
           contributor_gender?: string | null
+          language?: string | null
           duration: number
           status?: "pending" | "approved"
           reviewed_by?: string | null
@@ -170,6 +172,7 @@ export type Database = {
           sentence_mozilla_id?: string | null
           contributor_age?: string | null
           contributor_gender?: string | null
+          language?: string | null
           duration?: number
           status?: "pending" | "approved"
           reviewed_by?: string | null

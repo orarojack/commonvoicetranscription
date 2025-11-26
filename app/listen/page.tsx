@@ -467,11 +467,25 @@ export default function ListenPage() {
       setLoading(true)
       backgroundLoadRef.current = false // Reset background load flag
       
+      // Get validator's language from their profile (get it once at the start)
+      let validatorLanguage: string | undefined = undefined
+      if (user?.languages && user.languages.length > 0) {
+        validatorLanguage = user.languages[0]
+        console.log(`🌍 Filtering recordings by validator's language: ${validatorLanguage}`)
+      } else {
+        console.warn('⚠️ Validator has no language selected in profile. Showing all languages.')
+      }
+      
       // INSTANT LOADING: Fetch only first 10 recordings with limit at database level
       // FIXED: Exclude recordings the reviewer has already reviewed
+      // NEW: Filter by validator's selected language
       console.log('⚡ Loading first batch of recordings (10)...')
+      
       const firstBatch = user?.id 
-        ? await db.getRecordingsByStatusExcludingReviewedByUser("pending", user.id, { limit: 10 })
+        ? await db.getRecordingsByStatusExcludingReviewedByUser("pending", user.id, { 
+            limit: 10,
+            language: validatorLanguage
+          })
         : await db.getRecordingsByStatus("pending", { limit: 10 })
       
       // Filter helper function
@@ -563,10 +577,19 @@ export default function ListenPage() {
       console.log('🔄 Loading more recordings in background...')
       setTimeout(async () => {
         try {
+          // Get validator's language again (in case it changed, though unlikely)
+          let validatorLanguage: string | undefined = undefined
+          if (user?.languages && user.languages.length > 0) {
+            validatorLanguage = user.languages[0]
+          }
+          
           // Fetch more recordings (without limit this time, or with a larger limit)
           // FIXED: Exclude recordings the reviewer has already reviewed
+          // NEW: Filter by validator's selected language
           const moreRecordings = user?.id 
-            ? await db.getRecordingsByStatusExcludingReviewedByUser("pending", user.id)
+            ? await db.getRecordingsByStatusExcludingReviewedByUser("pending", user.id, {
+                language: validatorLanguage
+              })
             : await db.getRecordingsByStatus("pending")
           
           console.log(`📊 Background load: Fetched ${moreRecordings.length} total recordings from database`)

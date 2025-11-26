@@ -712,14 +712,30 @@ class SupabaseDatabase {
   }
 
   // FIXED: Get pending recordings excluding those already reviewed by the reviewer
+  // NEW: Also filters by validator's selected language
   async getRecordingsByStatusExcludingReviewedByUser(
     status: Recording["status"], 
     reviewerId: string,
-    options?: { limit?: number }
+    options?: { limit?: number; language?: string }
   ): Promise<Recording[]> {
     try {
       if (!reviewerId || !isValidUUID(reviewerId)) {
         return await this.getRecordingsByStatus(status, options)
+      }
+
+      // Get reviewer's language from their profile
+      let reviewerLanguage: string | null = null
+      if (options?.language) {
+        reviewerLanguage = options.language
+      } else {
+        try {
+          const reviewer = await this.getUserById(reviewerId)
+          if (reviewer && reviewer.languages && reviewer.languages.length > 0) {
+            reviewerLanguage = reviewer.languages[0]
+          }
+        } catch (userError) {
+          console.warn("Could not fetch reviewer language, will show all languages:", userError)
+        }
       }
 
       // First, get recordings the reviewer has already reviewed
@@ -737,12 +753,20 @@ class SupabaseDatabase {
       // Fetch pending recordings excluding user's own recordings
       let allRecordings = await this.getRecordingsByStatusExcludingUser(status, reviewerId, options)
 
+      // Filter by language if reviewer has a language selected
+      if (reviewerLanguage) {
+        allRecordings = allRecordings.filter(
+          recording => (recording as any).language === reviewerLanguage
+        )
+        console.log(`🌍 Filtering by language "${reviewerLanguage}": ${allRecordings.length} recordings match`)
+      }
+
       // Filter out recordings the reviewer has already reviewed
       const availableRecordings = allRecordings.filter(
         recording => !reviewedRecordingIds.has(recording.id)
       )
 
-      console.log(`📊 Reviewer ${reviewerId}: ${allRecordings.length} pending recordings, ${reviewedRecordingIds.size} already reviewed, ${availableRecordings.length} available`)
+      console.log(`📊 Reviewer ${reviewerId} (${reviewerLanguage || 'all languages'}): ${allRecordings.length} pending recordings, ${reviewedRecordingIds.size} already reviewed, ${availableRecordings.length} available`)
       
       return availableRecordings
     } catch (error) {
