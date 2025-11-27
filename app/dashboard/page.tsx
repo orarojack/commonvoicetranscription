@@ -107,8 +107,58 @@ export default function DashboardPage() {
           
           // Load luo reviews for this reviewer
           const userLuoReviews = await db.getLuoReviewsByReviewer(user.id, { limit: 100 })
-          setReviews(userLuoReviews)
-          setFilteredReviews(userLuoReviews)
+          
+          // Fetch recording data for each review
+          if (userLuoReviews.length > 0) {
+            const recordingIds = userLuoReviews.map(r => r.recording_id).filter(Boolean)
+            const recordingsMap = new Map()
+            
+            if (recordingIds.length > 0) {
+              // Fetch recordings from luo table
+              const { data: recordingsData, error: recordingsError } = await supabase
+                .from("luo")
+                .select("*")
+                .in("id", recordingIds)
+              
+              if (!recordingsError && recordingsData) {
+                // Map recordings directly from fetched data
+                const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
+                recordingsData.forEach(rec => {
+                  let audioUrl = rec.audio_url
+                  if (!audioUrl && rec.mediaPathId) {
+                    if (supabaseUrl) {
+                      let filename = rec.mediaPathId.trim().replace(/[_\s]+$/, '')
+                      const hasExtension = filename.match(/\.(wav|mp3|ogg|webm|m4a|flac|aac|opus)$/i)
+                      if (!hasExtension) {
+                        filename = `${filename}.wav`
+                      }
+                      audioUrl = `${supabaseUrl}/storage/v1/object/public/luo/${encodeURIComponent(filename)}`
+                    }
+                  }
+                  
+                  const mapped: any = {
+                    ...rec,
+                    sentence: rec.cleaned_transcript || rec.actualSentence || rec.sentence || rec.translatedText || rec.audio_transcript || '',
+                    audio_url: audioUrl,
+                    duration: rec.duration || 0,
+                  }
+                  recordingsMap.set(rec.id, mapped)
+                })
+              }
+            }
+            
+            // Join recording data with reviews
+            const reviewsWithRecordings = userLuoReviews.map(review => ({
+              ...review,
+              recording: recordingsMap.get(review.recording_id) || null
+            }))
+            
+            setReviews(reviewsWithRecordings)
+            setFilteredReviews(reviewsWithRecordings)
+          } else {
+            setReviews(userLuoReviews)
+            setFilteredReviews(userLuoReviews)
+          }
           
           // Load system stats in background (non-blocking)
           setTimeout(async () => {
@@ -167,10 +217,57 @@ export default function DashboardPage() {
               db.getLuoReviewsByReviewer(user.id, { limit: 100 }).catch(() => [])
             ])
             
-            // Combine reviews from both tables
-            const allUserReviews = [...userReviews, ...userLuoReviews]
-            setReviews(allUserReviews)
-            setFilteredReviews(allUserReviews)
+            // Fetch recording data for luo reviews
+            let reviewsWithRecordings = [...userReviews]
+            if (userLuoReviews.length > 0) {
+              const recordingIds = userLuoReviews.map(r => r.recording_id).filter(Boolean)
+              const recordingsMap = new Map()
+              
+              if (recordingIds.length > 0) {
+                // Fetch recordings from luo table
+                const { data: recordingsData, error: recordingsError } = await supabase
+                  .from("luo")
+                  .select("*")
+                  .in("id", recordingIds)
+                
+                if (!recordingsError && recordingsData) {
+                  // Map recordings
+                  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
+                  recordingsData.forEach(rec => {
+                    let audioUrl = rec.audio_url
+                    if (!audioUrl && rec.mediaPathId) {
+                      if (supabaseUrl) {
+                        let filename = rec.mediaPathId.trim().replace(/[_\s]+$/, '')
+                        const hasExtension = filename.match(/\.(wav|mp3|ogg|webm|m4a|flac|aac|opus)$/i)
+                        if (!hasExtension) {
+                          filename = `${filename}.wav`
+                        }
+                        audioUrl = `${supabaseUrl}/storage/v1/object/public/luo/${encodeURIComponent(filename)}`
+                      }
+                    }
+                    
+                    const mapped: any = {
+                      ...rec,
+                      sentence: rec.cleaned_transcript || rec.actualSentence || rec.sentence || rec.translatedText || rec.audio_transcript || '',
+                      audio_url: audioUrl,
+                      duration: rec.duration || 0,
+                    }
+                    recordingsMap.set(rec.id, mapped)
+                  })
+                }
+              }
+              
+              // Join recording data with luo reviews
+              const luoReviewsWithRecordings = userLuoReviews.map(review => ({
+                ...review,
+                recording: recordingsMap.get(review.recording_id) || null
+              }))
+              
+              reviewsWithRecordings = [...userReviews, ...luoReviewsWithRecordings]
+            }
+            
+            setReviews(reviewsWithRecordings)
+            setFilteredReviews(reviewsWithRecordings)
             
             // Load remaining reviews in background
             setTimeout(async () => {
@@ -179,8 +276,54 @@ export default function DashboardPage() {
                   db.getReviewsByReviewer(user.id).catch(() => []),
                   db.getLuoReviewsByReviewer(user.id).catch(() => [])
                 ])
-                const allCombined = [...allOldReviews, ...allLuoReviews]
-                if (allCombined.length > allUserReviews.length) {
+                
+                // Fetch recording data for all luo reviews
+                let allCombined = [...allOldReviews]
+                if (allLuoReviews.length > 0) {
+                  const allRecordingIds = allLuoReviews.map(r => r.recording_id).filter(Boolean)
+                  const allRecordingsMap = new Map()
+                  
+                  if (allRecordingIds.length > 0) {
+                    const { data: allRecordingsData, error: allRecordingsError } = await supabase
+                      .from("luo")
+                      .select("*")
+                      .in("id", allRecordingIds)
+                    
+                    if (!allRecordingsError && allRecordingsData) {
+                      const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
+                      allRecordingsData.forEach(rec => {
+                        let audioUrl = rec.audio_url
+                        if (!audioUrl && rec.mediaPathId) {
+                          if (supabaseUrl) {
+                            let filename = rec.mediaPathId.trim().replace(/[_\s]+$/, '')
+                            const hasExtension = filename.match(/\.(wav|mp3|ogg|webm|m4a|flac|aac|opus)$/i)
+                            if (!hasExtension) {
+                              filename = `${filename}.wav`
+                            }
+                            audioUrl = `${supabaseUrl}/storage/v1/object/public/luo/${encodeURIComponent(filename)}`
+                          }
+                        }
+                        
+                        const mapped: any = {
+                          ...rec,
+                          sentence: rec.cleaned_transcript || rec.actualSentence || rec.sentence || rec.translatedText || rec.audio_transcript || '',
+                          audio_url: audioUrl,
+                          duration: rec.duration || 0,
+                        }
+                        allRecordingsMap.set(rec.id, mapped)
+                      })
+                    }
+                  }
+                  
+                  const allLuoReviewsWithRecordings = allLuoReviews.map(review => ({
+                    ...review,
+                    recording: allRecordingsMap.get(review.recording_id) || null
+                  }))
+                  
+                  allCombined = [...allOldReviews, ...allLuoReviewsWithRecordings]
+                }
+                
+                if (allCombined.length > reviewsWithRecordings.length) {
                   setReviews(allCombined)
                   setFilteredReviews(allCombined)
                 }
@@ -380,7 +523,7 @@ export default function DashboardPage() {
       filtered = filtered.filter(review => 
         review.recording?.sentence?.toLowerCase().includes(searchLower) ||
         review.decision?.toLowerCase().includes(searchLower) ||
-        review.comments?.toLowerCase().includes(searchLower)
+        (review.notes || review.comments)?.toLowerCase().includes(searchLower)
       )
     }
 
@@ -1364,7 +1507,7 @@ export default function DashboardPage() {
                             <TableCell>
                               <div className="max-w-xs">
                                 <p className="text-xs text-gray-600 line-clamp-2">
-                                  {review.comments || 'No comments'}
+                                  {review.notes || review.comments || 'No comments'}
                                 </p>
                               </div>
                             </TableCell>
@@ -1487,7 +1630,7 @@ export default function DashboardPage() {
                         </td>
                         <td className="py-3 px-4">
                           <div className="max-w-xs truncate text-gray-600">
-                            {review.comments || 'No comments'}
+                            {review.notes || review.comments || 'No comments'}
                           </div>
                         </td>
                       </tr>
