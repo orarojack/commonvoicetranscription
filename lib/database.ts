@@ -735,7 +735,32 @@ class SupabaseDatabase {
 
   // Helper: Map luo table records to LuoRecording format
   // luo table columns: id, status, language, sentence, actualSentence, translatedText, audio_url, user_id, duration, etc.
-  private mapLuoRecordings(data: any[]): LuoRecording[] {
+  private async mapLuoRecordings(data: any[]): Promise<LuoRecording[]> {
+    // Fetch user dialects for all unique user_ids in batch
+    const userIds = [...new Set(data.map(rec => rec.user_id).filter(Boolean))]
+    const userDialects: Record<string, string> = {}
+    
+    if (userIds.length > 0) {
+      try {
+        const { data: users, error } = await supabase
+          .from("users")
+          .select("id, accent_dialect, language_dialect")
+          .in("id", userIds)
+        
+        if (!error && users) {
+          users.forEach(user => {
+            // Prefer accent_dialect, fallback to language_dialect
+            const dialect = user.accent_dialect || user.language_dialect
+            if (dialect) {
+              userDialects[user.id] = dialect
+            }
+          })
+        }
+      } catch (error) {
+        console.warn("⚠️ Could not fetch user dialects:", error)
+      }
+    }
+    
     const mapped = data.map((rec: any) => {
       const mapped: any = {
         ...rec,
@@ -745,6 +770,8 @@ class SupabaseDatabase {
         user_id: rec.user_id || '', // luo table has user_id as text
         duration: rec.duration || 0,
         status: rec.status || 'pending', // Default to pending if null
+        // Get dialect from luo table if available, otherwise from user
+        dialect: rec.dialect || rec.accent_dialect || rec.language_dialect || userDialects[rec.user_id] || null,
       }
       // Handle audio_url - luo table has audio_url and mediaPathId columns
       // Prefer audio_url, fallback to mediaPathId
@@ -968,7 +995,7 @@ class SupabaseDatabase {
           }
         }
 
-        return this.mapLuoRecordings(data || [])
+        return await this.mapLuoRecordings(data || [])
       }
 
       // Use pagination to fetch ALL recordings by status
@@ -1009,7 +1036,7 @@ class SupabaseDatabase {
           hasMore = false
         } else {
           // Map luo table columns to Recording format
-          const mappedBatch = this.mapLuoRecordings(recordingsBatch)
+          const mappedBatch = await this.mapLuoRecordings(recordingsBatch)
           allRecordings = [...allRecordings, ...mappedBatch]
           hasMore = recordingsBatch.length === pageSize
           page++
@@ -1371,6 +1398,44 @@ class SupabaseDatabase {
     }
   }
 
+  // NEW: Update recording in luo table
+  async updateLuoRecording(
+    id: string,
+    updates: Partial<LuoRecording>,
+  ): Promise<LuoRecording | null> {
+    try {
+      if (!id || !id.trim()) {
+        throw new Error("Invalid recording ID provided")
+      }
+
+      const { data, error } = await supabase
+        .from("luo")
+        .update({
+          ...updates,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", id)
+        .select()
+        .single()
+
+      if (error) {
+        console.error("Database error updating luo recording:", error)
+        throw new Error(`Failed to update luo recording: ${error.message}`)
+      }
+
+      // Map the result to LuoRecording format
+      if (data) {
+        const mapped = await this.mapLuoRecordings([data])
+        return mapped[0] || null
+      }
+
+      return null
+    } catch (error) {
+      console.error("Error in updateLuoRecording:", error)
+      throw error
+    }
+  }
+
   async getAllRecordings(options?: { limit?: number }): Promise<Recording[]> {
     try {
       // If limit is specified, use it directly (for performance when only need a few records)
@@ -1578,8 +1643,8 @@ class SupabaseDatabase {
 
       if (error) {
         console.error("Database error creating luo review:", error)
-        // Check if error is due to duplicate
-        if (error.code === "23505" || error.message.includes("duplicate") || error.message.includes("unique")) {
+        // Check if error is due to duplicate (unique constraint violation)
+        if (error.code === "23505" || error.message.includes("duplicate") || error.message.includes("unique") || error.message.includes("unique_luo_reviewer_recording")) {
           throw new Error("This recording has already been reviewed by you. Each recording can only be reviewed once per reviewer.")
         }
         throw new Error(`Failed to create review: ${error.message}`)

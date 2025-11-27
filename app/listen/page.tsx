@@ -471,7 +471,17 @@ export default function ListenPage() {
     if (!audio) return
 
     const updateTime = () => {
-      setCurrentTime(audio.currentTime)
+      if (audio) {
+        const newTime = audio.currentTime || 0
+        setCurrentTime(newTime)
+        
+        // Check if audio has reached the end
+        if (audio.ended || (audio.duration > 0 && newTime >= audio.duration - 0.2)) {
+          if (!hasListenedToEnd) {
+            setHasListenedToEnd(true)
+          }
+        }
+      }
     }
 
     const updateDuration = () => {
@@ -505,10 +515,14 @@ export default function ListenPage() {
     // Generate mock waveform data based on recording duration
     // In a real implementation, you would analyze the actual audio file
     const durationToUse = audioDuration || currentRecording?.duration || 10
-    const dataPoints = Math.floor(durationToUse) * 10
-    const data = Array.from({ length: dataPoints }, () => 
-      Math.random() * 0.8 + 0.2
-    )
+    // Generate more data points for better waveform visualization (60-120 bars)
+    const dataPoints = Math.min(120, Math.max(60, Math.floor(durationToUse * 6)))
+    const data = Array.from({ length: dataPoints }, (_, i) => {
+      // Create more realistic waveform pattern with variation
+      const base = Math.sin(i * 0.1) * 0.3 + 0.5
+      const variation = Math.random() * 0.3
+      return Math.max(0.1, Math.min(1, base + variation))
+    })
     console.log('📊 Generated waveform data:', dataPoints, 'points for', durationToUse, 'seconds')
     setWaveformData(data)
   }
@@ -846,15 +860,53 @@ export default function ListenPage() {
   }
 
   const handleWaveformClick = (event: React.MouseEvent<HTMLDivElement>) => {
-    if (!audioRef.current || !waveformRef.current) return
+    if (!audioRef.current || !waveformRef.current) {
+      console.warn("⚠️ Cannot seek: audio element not ready")
+      return
+    }
+
+    if (!duration || duration === 0 || isNaN(duration)) {
+      console.warn("⚠️ Cannot seek: duration not available")
+      toast({
+        title: "Audio Not Ready",
+        description: "Please wait for the audio to load before seeking.",
+        variant: "destructive",
+      })
+      return
+    }
 
     const rect = waveformRef.current.getBoundingClientRect()
     const clickX = event.clientX - rect.left
-    const clickPercentage = clickX / rect.width
-    const newTime = clickPercentage * duration
+    const clickPercentage = Math.max(0, Math.min(1, clickX / rect.width))
+    const newTime = Math.max(0, Math.min(duration, clickPercentage * duration))
 
+    console.log(`🎯 Seeking to ${newTime.toFixed(2)}s (${(clickPercentage * 100).toFixed(1)}%) of ${duration.toFixed(2)}s`)
+    
+    try {
+      // Update audio position
     audioRef.current.currentTime = newTime
     setCurrentTime(newTime)
+      
+      // Visual feedback
+      toast({
+        title: "Seeking",
+        description: `Jumped to ${formatTime(newTime)}`,
+        duration: 1000,
+      })
+      
+      // If audio was paused and user clicks, optionally start playing
+      // Uncomment if you want auto-play on seek:
+      // if (!isPlaying && audioRef.current.paused) {
+      //   audioRef.current.play().catch(err => console.error("Play error:", err))
+      // }
+    } catch (error) {
+      console.error("Error seeking audio:", error)
+      toast({
+        title: "Seek Failed",
+        description: "Could not seek to that position. Please try again.",
+        variant: "destructive",
+      })
+    }
   }
 
   const formatTime = (time: number) => {
@@ -927,24 +979,24 @@ export default function ListenPage() {
 
       if (validationChoice === 'yes') {
         // YES: Check if sentence was edited
-        const sentenceWasEdited = editedSentence.trim() !== currentRecording.sentence.trim()
-        
+      const sentenceWasEdited = editedSentence.trim() !== currentRecording.sentence.trim()
+      
         // Update recording with new transcription validation fields if edited
-        if (sentenceWasEdited && editedSentence.trim()) {
-          try {
+      if (sentenceWasEdited && editedSentence.trim()) {
+        try {
             await db.updateLuoRecording(currentRecording.id, {
-              original_sentence: currentRecording.sentence, // Preserve original
-              sentence: editedSentence.trim(),               // Update with corrected version
-              transcription_edited: true,                    // Mark as edited
-              edited_by: user.id,                           // Track who edited
-              edited_at: new Date().toISOString(),          // Track when edited
+            original_sentence: currentRecording.sentence, // Preserve original
+            sentence: editedSentence.trim(),               // Update with corrected version
+            transcription_edited: true,                    // Mark as edited
+            edited_by: user.id,                           // Track who edited
+            edited_at: new Date().toISOString(),          // Track when edited
               status: "approved", // Set status to approved
-            })
-            console.log('✅ Recording transcription updated and tracked:', editedSentence.trim())
-          } catch (updateError) {
-            console.error('Error updating recording transcription:', updateError)
-            // Continue with review even if sentence update fails
-          }
+          })
+          console.log('✅ Recording transcription updated and tracked:', editedSentence.trim())
+        } catch (updateError) {
+          console.error('Error updating recording transcription:', updateError)
+          // Continue with review even if sentence update fails
+        }
         } else {
           // If no edit, just approve the recording
           try {
@@ -959,24 +1011,24 @@ export default function ListenPage() {
         }
 
         // Create review notes
-        let reviewNotes = "Transcription verified as correct"
-        if (sentenceWasEdited && editedSentence.trim()) {
-          reviewNotes = `Transcription corrected from: "${currentRecording.sentence}" to: "${editedSentence.trim()}"`
-        }
+      let reviewNotes = "Transcription verified as correct"
+      if (sentenceWasEdited && editedSentence.trim()) {
+        reviewNotes = `Transcription corrected from: "${currentRecording.sentence}" to: "${editedSentence.trim()}"`
+      }
 
         // Create review (approved) - use createLuoReview for luo table recordings
         await db.createLuoReview({
-          recording_id: currentRecording.id,
-          reviewer_id: user.id,
-          decision: "approved",
-          notes: reviewNotes,
-          confidence: Math.floor(Math.random() * 20) + 80, // 80-100% confidence
-          time_spent: timeSpent,
-        })
+        recording_id: currentRecording.id,
+        reviewer_id: user.id,
+        decision: "approved",
+        notes: reviewNotes,
+        confidence: Math.floor(Math.random() * 20) + 80, // 80-100% confidence
+        time_spent: timeSpent,
+      })
 
-        toast({
+      toast({
           title: sentenceWasEdited ? "Transcription Corrected" : "Transcription Verified",
-          description: sentenceWasEdited 
+        description: sentenceWasEdited 
             ? "Recording submitted with corrected transcription" 
             : "Recording verified - transcription is correct",
         })
@@ -993,8 +1045,8 @@ export default function ListenPage() {
 
         // Update recording status to rejected
         try {
-          await db.updateLuoRecording(currentRecording.id, {
-            status: "rejected", // Set to rejected
+            await db.updateLuoRecording(currentRecording.id, {
+              status: "rejected" as any, // Set to rejected (luo table supports rejected status)
             reviewed_by: user.id,
             reviewed_at: new Date().toISOString(),
           })
@@ -1380,8 +1432,8 @@ export default function ListenPage() {
 
         {/* Main Content */}
         <div className="lg:col-span-4">
-          <Card className="bg-white border-2 border-gray-200 shadow-2xl h-[380px] flex flex-col">
-            <CardContent className="p-3 sm:p-4 flex flex-col h-full overflow-y-auto">
+          <Card className="bg-white border-2 border-gray-200 shadow-2xl min-h-[500px] max-h-[700px] sm:min-h-[600px] sm:max-h-[800px] flex flex-col">
+            <CardContent className="p-3 sm:p-4 flex flex-col h-full overflow-y-auto gap-3 sm:gap-4">
               {!currentRecording ? (
                 // Empty State - No More Recordings
                 <div className="text-center space-y-6 min-h-[250px] sm:min-h-[300px] lg:min-h-[400px] flex flex-col items-center justify-center">
@@ -1441,9 +1493,9 @@ export default function ListenPage() {
                 </div>
               ) : (
                 // Normal State - Recording Available
-                <div className="text-center space-y-3 flex flex-col h-full">
-                {/* Sentence Display - Fixed height container */}
-                  <div className="bg-gradient-to-r from-gray-50 to-gray-100 rounded-xl p-4 h-[120px] flex items-center justify-center border-2 border-gray-300 shadow-md overflow-hidden">
+                <div className="text-center flex flex-col h-full gap-3 sm:gap-4 min-h-0">
+                {/* Sentence Display - Responsive height container */}
+                  <div className="bg-gradient-to-r from-gray-50 to-gray-100 rounded-xl p-3 sm:p-4 min-h-[100px] sm:min-h-[120px] max-h-[150px] flex items-center justify-center border-2 border-gray-300 shadow-md overflow-hidden flex-shrink-0">
                     <div className="w-full px-2 h-full flex flex-col">
                       {isEditingSentence && validationChoice === 'yes' ? (
                         <div className="space-y-2 w-full h-full flex flex-col">
@@ -1490,24 +1542,34 @@ export default function ListenPage() {
                           <p className="text-base sm:text-lg font-semibold text-gray-900 leading-relaxed tracking-wide flex-1 text-center drop-shadow-sm" style={{ fontFamily: 'Poppins, sans-serif' }}>
                             {editedSentence || currentRecording.sentence}
                           </p>
-                          {/* Only show edit button if Yes is selected or not yet selected */}
-                          {validationChoice !== 'no' && (
-                            <Button
-                              onClick={() => {
-                                setIsEditingSentence(true)
-                                setEditedSentence(currentRecording.sentence)
+                          {/* Show dialect badge instead of edit icon */}
+                          {(currentRecording as any).dialect && (
+                            <Badge 
+                              variant="secondary"
+                              className="flex-shrink-0 bg-blue-100 text-blue-800 hover:bg-blue-200 border border-blue-300 px-2 py-1 text-xs font-semibold"
+                              title={`Dialect: ${(currentRecording as any).dialect}`}
+                            >
+                              {(currentRecording as any).dialect}
+                            </Badge>
+                          )}
+                          {/* Only show edit button if Yes is selected or not yet selected - but only if no dialect badge */}
+                          {validationChoice !== 'no' && !(currentRecording as any).dialect && (
+                          <Button
+                            onClick={() => {
+                              setIsEditingSentence(true)
+                              setEditedSentence(currentRecording.sentence)
                                 // Auto-select Yes when editing
                                 if (!validationChoice) {
                                   setValidationChoice('yes')
                                 }
-                              }}
-                              variant="ghost"
-                              size="sm"
-                              className="flex-shrink-0 hover:bg-gray-200 rounded-lg p-1.5 h-7 w-7 border border-gray-200"
-                              title="Edit sentence"
-                            >
-                              <Edit2 className="h-3 w-3 text-gray-700" />
-                            </Button>
+                            }}
+                            variant="ghost"
+                            size="sm"
+                            className="flex-shrink-0 hover:bg-gray-200 rounded-lg p-1.5 h-7 w-7 border border-gray-200"
+                            title="Edit sentence"
+                          >
+                            <Edit2 className="h-3 w-3 text-gray-700" />
+                          </Button>
                           )}
                         </div>
                       )}
@@ -1516,61 +1578,156 @@ export default function ListenPage() {
 
 
                 {/* Audio Player */}
-                <div className="flex-1 flex items-center justify-center relative min-h-0 -mx-3 sm:-mx-4">
-                  <div className="flex justify-between items-center w-full h-16">
-                    {/* Left Waveform */}
-                    <div className="flex items-center space-x-0.5 flex-1 justify-end pr-0">
-                    {[...Array(30)].map((_, i) => (
-                      <div
-                        key={i}
-                          className="w-0.5 rounded-full transition-all duration-300"
-                        style={{
-                            height: `${Math.sin(i * 0.2) * 10 + 15}px`,
-                            backgroundColor: `rgba(59, 130, 246, ${1 - i * 0.02})`,
-                            animationDelay: `${i * 0.03}s`,
-                            boxShadow: isPlaying ? `0 0 6px rgba(59, 130, 246, ${0.5 - i * 0.01})` : 'none'
-                        }}
-                      />
-                    ))}
-                  </div>
-
-                  <div className="relative flex-shrink-0">
-                    {/* Glowing aura effect */}
-                      <div className="absolute inset-0 rounded-full bg-gradient-to-r from-blue-400 via-purple-400 to-indigo-400 blur-lg opacity-60 animate-pulse"></div>
-                    <Button
-                      onClick={togglePlayback}
-                      size="lg"
-                      className={`
-                          relative h-14 w-14 rounded-full bg-white shadow-xl transition-all duration-300 transform hover:scale-105 hover:shadow-blue-500/30 border-2 border-blue-100 hover:border-blue-300 group aspect-square
-                        ${isPlaying ? 'animate-pulse' : ''}
-                        ${!currentRecording?.audio_url ? 'opacity-50 cursor-not-allowed' : ''}
-                      `}
-                      disabled={!currentRecording?.audio_url || audioLoading}
+                <div className="flex-1 flex items-center justify-center relative min-h-[180px] sm:min-h-[200px] max-h-[280px] flex-shrink-0 -mx-3 sm:-mx-4">
+                  <div className="flex flex-col items-center w-full gap-2 sm:gap-3 h-full justify-center">
+                    {/* Interactive Waveform */}
+                    <div 
+                      ref={waveformRef}
+                      onClick={handleWaveformClick}
+                      className="w-full h-20 sm:h-24 flex items-center justify-center cursor-pointer group relative px-2 sm:px-4 py-2 bg-gradient-to-b from-gray-50 to-white rounded-lg border border-gray-200 shadow-sm hover:shadow-md transition-shadow flex-shrink-0"
+                      title="Click anywhere on the waveform to seek"
                     >
-                      {audioLoading ? (
-                          <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-blue-500"></div>
-                      ) : isPlaying ? (
-                          <Pause className="h-5 w-5 text-blue-500 group-hover:text-blue-600" />
-                      ) : (
-                          <Play className="h-5 w-5 text-blue-500 group-hover:text-blue-600" />
-                      )}
-                    </Button>
-                  </div>
-
-                    {/* Right Waveform */}
-                    <div className="flex items-center space-x-0.5 flex-1 justify-start pl-0">
-                    {[...Array(30)].map((_, i) => (
+                      {/* Waveform Container */}
+                      <div className="w-full h-full flex items-center justify-center gap-[2px] relative overflow-hidden">
+                        {waveformData.length > 0 ? (
+                          // Use actual waveform data with real-time progress
+                          waveformData.map((amplitude, i) => {
+                            const progress = duration > 0 ? currentTime / duration : 0
+                            const barPosition = i / waveformData.length
+                            const isPlayed = barPosition <= progress
+                            const distanceFromProgress = Math.abs(barPosition - progress)
+                            const isActive = distanceFromProgress < 0.015 // Highlight current position
+                            const isNearActive = distanceFromProgress < 0.05 // Slightly highlight nearby bars
+                            
+                            // Animate bars near the playhead when playing
+                            const shouldPulse = isPlaying && isNearActive
+                            
+                            return (
                       <div
                         key={i}
-                          className="w-0.5 rounded-full transition-all duration-300"
+                                className="rounded-sm transition-all duration-75 hover:opacity-90 cursor-pointer"
                         style={{
-                            height: `${Math.sin(i * 0.2) * 10 + 15}px`,
-                            backgroundColor: `rgba(147, 51, 234, ${1 - i * 0.02})`,
-                            animationDelay: `${i * 0.03}s`,
-                            boxShadow: isPlaying ? `0 0 6px rgba(147, 51, 234, ${0.5 - i * 0.01})` : 'none'
-                        }}
-                      />
-                    ))}
+                                  height: `${Math.max(6, amplitude * 70)}px`,
+                                  width: '100%',
+                                  minWidth: '2px',
+                                  backgroundColor: isActive 
+                                    ? 'rgba(59, 130, 246, 1)' 
+                                    : isPlayed 
+                                      ? isPlaying
+                                        ? 'rgba(59, 130, 246, 0.7)'
+                                        : 'rgba(59, 130, 246, 0.5)'
+                                      : 'rgba(147, 51, 234, 0.3)',
+                                  boxShadow: isActive 
+                                    ? '0 0 10px rgba(59, 130, 246, 1), 0 0 20px rgba(59, 130, 246, 0.5)' 
+                                    : isPlayed && isPlaying
+                                      ? '0 0 6px rgba(59, 130, 246, 0.6)'
+                                      : 'none',
+                                  transform: shouldPulse 
+                                    ? `scaleY(${1 + Math.sin(Date.now() / 100 + i) * 0.1})` 
+                                    : 'scaleY(1)',
+                                  transition: 'background-color 0.1s ease, box-shadow 0.1s ease, transform 0.1s ease',
+                                  animation: shouldPulse ? 'pulse-bar 0.5s ease-in-out infinite' : 'none',
+                                }}
+                              />
+                            )
+                          })
+                        ) : (
+                          // Fallback: Show animated bars while loading
+                          [...Array(80)].map((_, i) => (
+                            <div
+                              key={i}
+                              className="rounded-sm transition-all duration-300 flex-1"
+                              style={{
+                                height: `${Math.sin(i * 0.15) * 12 + 20}px`,
+                                backgroundColor: `rgba(59, 130, 246, ${0.3 + Math.random() * 0.3})`,
+                                minWidth: '2px',
+                                animation: isPlaying ? `wave-animation ${0.5 + Math.random() * 0.5}s ease-in-out infinite` : 'none',
+                                animationDelay: `${i * 0.02}s`,
+                              }}
+                            />
+                          ))
+                        )}
+                  </div>
+
+                      {/* Progress Indicator Line - Moving with audio */}
+                      {duration > 0 && (
+                        <div
+                          className="absolute top-0 bottom-0 w-1 bg-gradient-to-b from-blue-500 via-blue-600 to-blue-500 pointer-events-none z-10 rounded-full"
+                          style={{
+                            left: `${Math.max(0, Math.min(100, (currentTime / duration) * 100))}%`,
+                            transform: 'translateX(-50%)',
+                            boxShadow: '0 0 12px rgba(59, 130, 246, 1), 0 0 24px rgba(59, 130, 246, 0.6)',
+                            transition: isPlaying ? 'left 0.1s linear' : 'left 0.2s ease-out',
+                          }}
+                        >
+                          {/* Glowing dot at playhead */}
+                          <div className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 w-3 h-3 bg-blue-500 rounded-full shadow-lg"></div>
+                        </div>
+                      )}
+                      
+                      {/* Click indicator overlay */}
+                      <div className="absolute inset-0 pointer-events-none opacity-0 group-hover:opacity-100 transition-opacity">
+                        <div className="absolute top-0 bottom-0 left-0 right-0 bg-gradient-to-r from-transparent via-blue-200/20 to-transparent"></div>
+                      </div>
+                      
+                      {/* Hover Tooltip with seek preview */}
+                      <div className="absolute -top-10 left-1/2 transform -translate-x-1/2 bg-gray-900 text-white text-xs px-3 py-1.5 rounded-lg opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none whitespace-nowrap z-20 shadow-lg">
+                        <div className="flex items-center gap-2">
+                          <span>🎯 Click to seek</span>
+                          <span className="text-gray-400">•</span>
+                          <span className="font-mono">{formatTime(currentTime)} / {formatTime(duration)}</span>
+                        </div>
+                        <div className="absolute bottom-0 left-1/2 transform -translate-x-1/2 translate-y-full w-0 h-0 border-l-4 border-r-4 border-t-4 border-transparent border-t-gray-900"></div>
+                      </div>
+                    </div>
+                    
+                    {/* CSS animations */}
+                    <style dangerouslySetInnerHTML={{__html: `
+                      @keyframes pulse-bar {
+                        0%, 100% { transform: scaleY(1); }
+                        50% { transform: scaleY(1.15); }
+                      }
+                      @keyframes wave-animation {
+                        0%, 100% { transform: scaleY(1); opacity: 0.6; }
+                        50% { transform: scaleY(1.2); opacity: 1; }
+                      }
+                    `}} />
+
+                    {/* Play Button and Time Display */}
+                    <div className="flex items-center justify-center gap-2 sm:gap-4 w-full flex-shrink-0">
+                      {/* Current Time */}
+                      <div className="text-xs sm:text-sm font-mono text-gray-600 min-w-[45px] sm:min-w-[50px] text-right">
+                        {formatTime(currentTime)}
+                      </div>
+
+                      {/* Play/Pause Button */}
+                      <div className="relative flex-shrink-0">
+                        {/* Glowing aura effect */}
+                        <div className="absolute inset-0 rounded-full bg-gradient-to-r from-blue-400 via-purple-400 to-indigo-400 blur-lg opacity-60 animate-pulse"></div>
+                        <Button
+                          onClick={togglePlayback}
+                          size="lg"
+                          className={`
+                            relative h-12 w-12 sm:h-14 sm:w-14 rounded-full bg-white shadow-xl transition-all duration-300 transform hover:scale-105 hover:shadow-blue-500/30 border-2 border-blue-100 hover:border-blue-300 group aspect-square
+                            ${isPlaying ? 'animate-pulse' : ''}
+                            ${!currentRecording?.audio_url ? 'opacity-50 cursor-not-allowed' : ''}
+                          `}
+                          disabled={!currentRecording?.audio_url || audioLoading}
+                        >
+                          {audioLoading ? (
+                            <div className="animate-spin rounded-full h-4 w-4 sm:h-5 sm:w-5 border-b-2 border-blue-500"></div>
+                          ) : isPlaying ? (
+                            <Pause className="h-4 w-4 sm:h-5 sm:w-5 text-blue-500 group-hover:text-blue-600" />
+                          ) : (
+                            <Play className="h-4 w-4 sm:h-5 sm:w-5 text-blue-500 group-hover:text-blue-600" />
+                          )}
+                        </Button>
+                      </div>
+
+                      {/* Total Duration */}
+                      <div className="text-xs sm:text-sm font-mono text-gray-600 min-w-[45px] sm:min-w-[50px]">
+                        {formatTime(duration)}
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -1586,11 +1743,11 @@ export default function ListenPage() {
                 />
 
                 {/* Validation Buttons */}
-                <div className="space-y-3 flex-shrink-0">
+                <div className="space-y-3 sm:space-y-4 flex-shrink-0 mt-auto pt-2">
                   {!hasListenedToEnd && (
-                    <div className="bg-amber-100 border-2 border-amber-400 rounded-lg p-3 text-center shadow-sm">
-                      <p className="text-sm text-amber-900 font-semibold flex items-center justify-center gap-2">
-                        <span className="text-lg">⚠️</span>
+                    <div className="bg-amber-100 border-2 border-amber-400 rounded-lg p-2 sm:p-3 text-center shadow-sm">
+                      <p className="text-xs sm:text-sm text-amber-900 font-semibold flex items-center justify-center gap-2">
+                        <span className="text-base sm:text-lg">⚠️</span>
                         <span>Please listen to the entire audio before submitting</span>
                       </p>
                     </div>
@@ -1598,37 +1755,36 @@ export default function ListenPage() {
                   
                   {/* Yes/No Validation Section */}
                   {hasListenedToEnd && (
-                    <div className="space-y-4 px-4 sm:px-0">
+                    <div className="space-y-4 sm:space-y-6 px-2 sm:px-4">
                       {/* Yes/No Buttons */}
-                      <div className="flex justify-center gap-4">
+                      <div className="flex flex-col sm:flex-row justify-center gap-3 sm:gap-4">
                         <Button
                           onClick={() => {
                             setValidationChoice('yes')
-                            // If they select Yes, allow editing
-                            if (!isEditingSentence) {
-                              setIsEditingSentence(true)
-                            }
+                            setEditedSentence(currentRecording?.sentence || '')
+                            setIsEditingSentence(false) // Don't auto-edit, let them choose
                           }}
                           size="default"
-                          className={`flex items-center gap-2 h-auto py-3 px-8 rounded-xl shadow-lg hover:shadow-xl transition-all duration-300 transform hover:scale-105 active:scale-95 touch-manipulation min-w-[150px] font-semibold text-lg border-2 ${
+                          className={`flex items-center justify-center gap-2 h-auto py-3 sm:py-4 px-6 sm:px-8 rounded-xl shadow-lg hover:shadow-xl transition-all duration-300 transform hover:scale-105 active:scale-95 touch-manipulation w-full sm:w-auto sm:min-w-[160px] font-semibold text-base sm:text-lg border-2 ${
                             validationChoice === 'yes'
-                              ? 'bg-gradient-to-r from-green-600 to-green-700 hover:from-green-700 hover:to-green-800 text-white border-green-500'
-                              : 'bg-white hover:bg-green-50 text-gray-700 border-gray-300'
+                              ? 'bg-gradient-to-r from-green-600 to-green-700 hover:from-green-700 hover:to-green-800 text-white border-green-500 shadow-green-500/50'
+                              : 'bg-white hover:bg-green-50 text-gray-700 border-gray-300 hover:border-green-300'
                           }`}
                         >
                           <Check className="h-5 w-5" />
                           <span>Yes</span>
-                        </Button>
+                      </Button>
                         <Button
                           onClick={() => {
                             setValidationChoice('no')
                             setIsEditingSentence(false) // Don't allow editing when No is selected
+                            setRejectionReason('') // Reset reason
                           }}
                           size="default"
-                          className={`flex items-center gap-2 h-auto py-3 px-8 rounded-xl shadow-lg hover:shadow-xl transition-all duration-300 transform hover:scale-105 active:scale-95 touch-manipulation min-w-[150px] font-semibold text-lg border-2 ${
+                          className={`flex items-center justify-center gap-2 h-auto py-3 sm:py-4 px-6 sm:px-8 rounded-xl shadow-lg hover:shadow-xl transition-all duration-300 transform hover:scale-105 active:scale-95 touch-manipulation w-full sm:w-auto sm:min-w-[160px] font-semibold text-base sm:text-lg border-2 ${
                             validationChoice === 'no'
-                              ? 'bg-gradient-to-r from-red-600 to-red-700 hover:from-red-700 hover:to-red-800 text-white border-red-500'
-                              : 'bg-white hover:bg-red-50 text-gray-700 border-gray-300'
+                              ? 'bg-gradient-to-r from-red-600 to-red-700 hover:from-red-700 hover:to-red-800 text-white border-red-500 shadow-red-500/50'
+                              : 'bg-white hover:bg-red-50 text-gray-700 border-gray-300 hover:border-red-300'
                           }`}
                         >
                           <X className="h-5 w-5" />
@@ -1636,60 +1792,81 @@ export default function ListenPage() {
                         </Button>
                       </div>
 
-                      {/* Edit Field - Show when Yes is selected */}
-                      {validationChoice === 'yes' && (
-                        <div className="space-y-2">
-                          <label className="text-sm font-semibold text-gray-700 block">
-                            Correct the transcription if needed:
-                          </label>
-                          <Textarea
-                            value={editedSentence}
-                            onChange={(e) => setEditedSentence(e.target.value)}
-                            className="text-base font-semibold text-gray-900 leading-relaxed tracking-wide min-h-[80px] resize-none w-full border-2 border-gray-300 focus:border-green-500 focus:ring-2 focus:ring-green-200"
-                            style={{ fontFamily: 'Poppins, sans-serif' }}
-                            placeholder="Edit the sentence to match what was recorded..."
-                          />
-                        </div>
-                      )}
-
-                      {/* Reason Field - Show when No is selected */}
-                      {validationChoice === 'no' && (
-                        <div className="space-y-2">
-                          <label className="text-sm font-semibold text-gray-700 block">
-                            Please provide a reason for rejection: <span className="text-red-500">*</span>
-                          </label>
-                          <Textarea
-                            value={rejectionReason}
-                            onChange={(e) => setRejectionReason(e.target.value)}
-                            className="text-base font-semibold text-gray-900 leading-relaxed tracking-wide min-h-[80px] resize-none w-full border-2 border-gray-300 focus:border-red-500 focus:ring-2 focus:ring-red-200"
-                            style={{ fontFamily: 'Poppins, sans-serif' }}
-                            placeholder="Explain why the transcription is incorrect (e.g., wrong words, missing words, unclear audio, etc.)"
-                            required
-                          />
-                        </div>
-                      )}
-
-                      {/* Submit Button */}
+                      {/* Content Area - Shows when a choice is made */}
                       {validationChoice && (
-                        <div className="flex justify-center">
-                          <Button
-                            onClick={handleValidation}
-                            size="default"
-                            disabled={validationChoice === 'no' && !rejectionReason.trim()}
-                            className={`flex items-center gap-2 h-auto py-3 px-8 rounded-xl shadow-lg hover:shadow-xl transition-all duration-300 transform hover:scale-105 active:scale-95 touch-manipulation min-w-[200px] font-semibold text-lg border-2 ${
-                              validationChoice === 'yes'
-                                ? 'bg-gradient-to-r from-green-600 to-green-700 hover:from-green-700 hover:to-green-800 text-white border-green-500'
-                                : 'bg-gradient-to-r from-red-600 to-red-700 hover:from-red-700 hover:to-red-800 text-white border-red-500'
-                            } ${
-                              validationChoice === 'no' && !rejectionReason.trim() ? 'opacity-50 cursor-not-allowed hover:scale-100' : ''
-                            }`}
-                          >
-                            <Check className="h-5 w-5" />
-                            <span>Submit Review</span>
-                          </Button>
+                        <div className="bg-gradient-to-br from-gray-50 to-gray-100 rounded-xl p-3 sm:p-4 md:p-5 border-2 border-gray-200 shadow-md space-y-3 sm:space-y-4 max-h-[300px] sm:max-h-[400px] overflow-y-auto">
+                          {/* Edit Field - Show when Yes is selected */}
+                          {validationChoice === 'yes' && (
+                            <div className="space-y-2 sm:space-y-3">
+                              <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2">
+                                <label className="text-sm sm:text-base font-bold text-gray-800 flex items-center gap-2">
+                                  <Check className="h-3 w-3 sm:h-4 sm:w-4 text-green-600" />
+                                  <span>Correct the transcription if needed:</span>
+                                </label>
+                                {editedSentence.trim() !== currentRecording?.sentence.trim() && (
+                                  <Badge variant="outline" className="bg-green-50 text-green-700 border-green-300 text-xs">
+                                    Edited
+                                  </Badge>
+                                )}
+                              </div>
+                              <Textarea
+                                value={editedSentence}
+                                onChange={(e) => setEditedSentence(e.target.value)}
+                                className="text-sm sm:text-base font-semibold text-gray-900 leading-relaxed tracking-wide min-h-[80px] sm:min-h-[100px] max-h-[200px] resize-y w-full border-2 border-gray-300 focus:border-green-500 focus:ring-2 focus:ring-green-200 rounded-lg p-2 sm:p-3"
+                                style={{ fontFamily: 'Poppins, sans-serif' }}
+                                placeholder="Edit the sentence to match what was recorded..."
+                              />
+                              <p className="text-xs text-gray-500 italic">
+                                💡 Tip: Leave as-is if the transcription is correct, or edit to fix any errors.
+                              </p>
+                            </div>
+                          )}
+
+                          {/* Reason Field - Show when No is selected */}
+                          {validationChoice === 'no' && (
+                            <div className="space-y-2 sm:space-y-3">
+                              <label className="text-sm sm:text-base font-bold text-gray-800 flex items-center gap-2 flex-wrap">
+                                <X className="h-3 w-3 sm:h-4 sm:w-4 text-red-600" />
+                                <span>Please provide a reason for rejection:</span>
+                                <span className="text-red-500 text-base sm:text-lg">*</span>
+                              </label>
+                              <Textarea
+                                value={rejectionReason}
+                                onChange={(e) => setRejectionReason(e.target.value)}
+                                className="text-sm sm:text-base font-semibold text-gray-900 leading-relaxed tracking-wide min-h-[80px] sm:min-h-[100px] max-h-[200px] resize-y w-full border-2 border-red-300 focus:border-red-500 focus:ring-2 focus:ring-red-200 rounded-lg p-2 sm:p-3"
+                                style={{ fontFamily: 'Poppins, sans-serif' }}
+                                placeholder="Explain why the transcription is incorrect (e.g., 'Wrong words', 'Missing words', 'Unclear audio', 'Background noise', etc.)"
+                                required
+                              />
+                              <p className="text-xs text-gray-500 italic">
+                                ⚠️ A reason is required to reject a transcription.
+                              </p>
+                            </div>
+                          )}
+
+                          {/* Submit Button */}
+                          <div className="flex justify-center pt-2">
+                            <Button
+                              onClick={handleValidation}
+                              size="default"
+                              disabled={validationChoice === 'no' && !rejectionReason.trim()}
+                              className={`flex items-center gap-2 h-auto py-3 sm:py-4 px-6 sm:px-10 rounded-xl shadow-lg hover:shadow-xl transition-all duration-300 transform hover:scale-105 active:scale-95 touch-manipulation w-full sm:w-auto sm:min-w-[220px] font-bold text-base sm:text-lg border-2 ${
+                                validationChoice === 'yes'
+                                  ? 'bg-gradient-to-r from-green-600 to-green-700 hover:from-green-700 hover:to-green-800 text-white border-green-500 shadow-green-500/50'
+                                  : 'bg-gradient-to-r from-red-600 to-red-700 hover:from-red-700 hover:to-red-800 text-white border-red-500 shadow-red-500/50'
+                              } ${
+                                validationChoice === 'no' && !rejectionReason.trim() 
+                                  ? 'opacity-50 cursor-not-allowed hover:scale-100' 
+                                  : ''
+                        }`}
+                      >
+                        <Check className="h-5 w-5" />
+                              <span>Submit Review</span>
+                      </Button>
+                          </div>
                         </div>
-                      )}
-                    </div>
+                    )}
+                  </div>
                   )}
                 </div>
               </div>
