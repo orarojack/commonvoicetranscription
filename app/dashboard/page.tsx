@@ -101,29 +101,16 @@ export default function DashboardPage() {
         const userStatsData = await db.getUserStats(user.id)
         setUserStats(userStatsData)
         
-        // Load recordings for reviewers (LIMITED to first 50 for fast loading)
+        // Load data for reviewers (from luo table)
         if (user.role === "reviewer") {
-          console.log('⚡ Loading first batch of reviewer recordings (50)...')
-          const userRecordings = await db.getRecordingsByUser(user.id, { limit: 50 })
-          setRecordings(userRecordings)
-          setFilteredRecordings(userRecordings)
-          setLoading(false) // Show UI immediately with first batch
+          console.log('⚡ Loading reviewer data from luo table...')
           
-          // Load remaining recordings in background
-          setTimeout(async () => {
-            try {
-              const allUserRecordings = await db.getRecordingsByUser(user.id)
-              if (allUserRecordings.length > userRecordings.length) {
-                console.log(`✅ Background load complete: ${allUserRecordings.length} total recordings`)
-                setRecordings(allUserRecordings)
-                setFilteredRecordings(allUserRecordings)
-              }
-            } catch (error) {
-              console.error('Background recordings load failed:', error)
-            }
-          }, 100)
+          // Load luo reviews for this reviewer
+          const userLuoReviews = await db.getLuoReviewsByReviewer(user.id, { limit: 100 })
+          setReviews(userLuoReviews)
+          setFilteredReviews(userLuoReviews)
           
-          // Load system stats and activity data in background (non-blocking)
+          // Load system stats in background (non-blocking)
           setTimeout(async () => {
             try {
               const systemStats = await db.getSystemStats()
@@ -133,22 +120,25 @@ export default function DashboardPage() {
             }
           }, 100)
           
-          // Load activity chart data in background (low priority)
+          // Load activity chart data in background (low priority) - combine both tables
           setTimeout(async () => {
             try {
-              // Only load recent data for chart (limit to last 100 for performance)
-              const [recentRecordings, recentReviews] = await Promise.all([
-                db.getAllRecordings().then(recs => recs.slice(0, 100)), // Only last 100 for chart
-                db.getAllReviews().then(revs => revs.slice(0, 100))   // Only last 100 for chart
+              // Load recent data from both tables for chart
+              const [recentRecordings, recentLuoRecordings, recentReviews, recentLuoReviews] = await Promise.all([
+                db.getAllRecordings({ limit: 50 }).catch(() => []),
+                db.getAllLuoRecordings({ limit: 50 }).catch(() => []),
+                db.getAllReviews({ limit: 50 }).catch(() => []),
+                db.getAllLuoReviews({ limit: 50 }).catch(() => [])
               ])
-              setAllRecordings(recentRecordings)
-              setAllReviews(recentReviews)
+              setAllRecordings([...recentRecordings, ...recentLuoRecordings])
+              setAllReviews([...recentReviews, ...recentLuoReviews])
             } catch (error) {
               console.error('Background activity data load failed:', error)
             }
           }, 500)
           
-          return // Early return for reviewers - don't load system-wide data
+          setLoading(false) // Show UI immediately
+          return // Early return for reviewers
         }
       }
 
@@ -157,102 +147,48 @@ export default function DashboardPage() {
       setStats(systemStats)
 
       // Load limited recordings and reviews for activity chart (only for reviewers/admins)
-      // OPTIMIZED: Only load recent data for chart (last 200 items)
-      const [allRecordingsData, allReviewsData] = await Promise.all([
-        db.getAllRecordings({ limit: 200 }),
-        db.getAllReviews({ limit: 200 })
+      // OPTIMIZED: Only load recent data for chart (last 200 items) from both tables
+      const [allRecordingsData, allLuoRecordingsData, allReviewsData, allLuoReviewsData] = await Promise.all([
+        db.getAllRecordings({ limit: 100 }).catch(() => []),
+        db.getAllLuoRecordings({ limit: 100 }).catch(() => []),
+        db.getAllReviews({ limit: 100 }).catch(() => []),
+        db.getAllLuoReviews({ limit: 100 }).catch(() => [])
       ])
-      setAllRecordings(allRecordingsData)
-      setAllReviews(allReviewsData)
+      setAllRecordings([...allRecordingsData, ...allLuoRecordingsData])
+      setAllReviews([...allReviewsData, ...allLuoReviewsData])
 
       // Load user-specific stats
       if (user) {
-        // Load reviews for reviewers (exclude reviews of own recordings)
-        if (user.role === "reviewer") {
-          // OPTIMIZED: Load first 100 reviews for instant display
-          const userReviews = await db.getReviewsByReviewer(user.id, { limit: 100 })
-          
-          // OPTIMIZED: Batch load recordings to get user_ids for filtering
-          const recordingIds = userReviews.map(review => review.recording_id)
-          const recordingsMap = new Map()
-          
-          if (recordingIds.length > 0) {
-            const { data: recordingsData } = await supabase
-              .from("recordings")
-              .select("id, user_id")
-              .in("id", recordingIds)
+          // Load reviews for reviewers (from both tables)
+          if (user.role === "reviewer") {
+            // Load from both reviews and luo_reviews tables
+            const [userReviews, userLuoReviews] = await Promise.all([
+              db.getReviewsByReviewer(user.id, { limit: 100 }).catch(() => []),
+              db.getLuoReviewsByReviewer(user.id, { limit: 100 }).catch(() => [])
+            ])
             
-            if (recordingsData) {
-              recordingsData.forEach(rec => recordingsMap.set(rec.id, rec))
-            }
-          }
-          
-          // OPTIMIZED: Batch load all unique user IDs in a single query instead of N+1 queries
-          const uniqueUserIds = [...new Set(
-            Array.from(recordingsMap.values()).map((rec: any) => rec.user_id).filter(Boolean)
-          )]
-          uniqueUserIds.push(user.id) // Add reviewer's own ID
-          
-          // OPTIMIZED: Batch fetch users in a single query
-          if (uniqueUserIds.length > 0) {
-            const { data: usersData, error: usersError } = await supabase
-              .from("users")
-              .select("id, email")
-              .in("id", uniqueUserIds)
+            // Combine reviews from both tables
+            const allUserReviews = [...userReviews, ...userLuoReviews]
+            setReviews(allUserReviews)
+            setFilteredReviews(allUserReviews)
             
-            if (!usersError && usersData) {
-              const userMap = new Map(usersData.map(u => [u.id, u]))
-              const reviewerUser = userMap.get(user.id)
-              
-              // Filter reviews using the cached user data
-              const filteredReviews = userReviews.filter(review => {
-                const recording = recordingsMap.get(review.recording_id) as any
-                if (!recording?.user_id) return true
-                
-                const recordingUser = userMap.get(recording.user_id)
-                return recordingUser && reviewerUser && recordingUser.email !== reviewerUser.email
-              })
-              
-              setReviews(filteredReviews)
-              setFilteredReviews(filteredReviews)
-              
-              // Load remaining reviews in background
-              setTimeout(async () => {
-                try {
-                  const allUserReviews = await db.getReviewsByReviewer(user.id)
-                  if (allUserReviews.length > userReviews.length) {
-                    // Batch load all recordings
-                    const allRecordingIds = allUserReviews.map(review => review.recording_id)
-                    const allRecordingsMap = new Map()
-                    
-                    if (allRecordingIds.length > 0) {
-                      const { data: allRecordingsData } = await supabase
-                        .from("recordings")
-                        .select("id, user_id")
-                        .in("id", allRecordingIds)
-                      
-                      if (allRecordingsData) {
-                        allRecordingsData.forEach(rec => allRecordingsMap.set(rec.id, rec))
-                      }
-                    }
-                    
-                    // Re-filter with all reviews
-                    const allFiltered = allUserReviews.filter(review => {
-                      const recording = allRecordingsMap.get(review.recording_id) as any
-                      if (!recording?.user_id) return true
-                      const recordingUser = userMap.get(recording.user_id)
-                      return recordingUser && reviewerUser && recordingUser.email !== reviewerUser.email
-                    })
-                    setReviews(allFiltered)
-                    setFilteredReviews(allFiltered)
-                  }
-                } catch (error) {
-                  console.error('Background reviews load failed:', error)
+            // Load remaining reviews in background
+            setTimeout(async () => {
+              try {
+                const [allOldReviews, allLuoReviews] = await Promise.all([
+                  db.getReviewsByReviewer(user.id).catch(() => []),
+                  db.getLuoReviewsByReviewer(user.id).catch(() => [])
+                ])
+                const allCombined = [...allOldReviews, ...allLuoReviews]
+                if (allCombined.length > allUserReviews.length) {
+                  setReviews(allCombined)
+                  setFilteredReviews(allCombined)
                 }
-              }, 500)
-            }
+              } catch (error) {
+                console.error('Background reviews load failed:', error)
+              }
+            }, 500)
           }
-        }
       }
     } catch (error) {
       console.error("Error loading dashboard data:", error)

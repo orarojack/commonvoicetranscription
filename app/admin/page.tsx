@@ -431,15 +431,21 @@ export default function AdminDashboardPage() {
       const firstUsers = await db.getAllUsers({ limit: 50 })
       setUsers(firstUsers)
       
-      // PRIORITY 3: Load first batch of recordings (100) for instant display
+      // PRIORITY 3: Load first batch of recordings (100) from both tables for instant display
       console.log("⚡ Loading first batch of recordings (100)...")
-      const firstRecordings = await db.getAllRecordings({ limit: 100 })
-      setRecordings(firstRecordings)
+      const [firstRecordings, firstLuoRecordings] = await Promise.all([
+        db.getAllRecordings({ limit: 50 }).catch(() => []),
+        db.getAllLuoRecordings({ limit: 50 }).catch(() => [])
+      ])
+      setRecordings([...firstRecordings, ...firstLuoRecordings])
       
-      // PRIORITY 4: Load first batch of reviews (100) for instant display
+      // PRIORITY 4: Load first batch of reviews (100) from both tables for instant display
       console.log("⚡ Loading first batch of reviews (100)...")
-      const firstReviews = await db.getAllReviews({ limit: 100 })
-      setReviews(firstReviews)
+      const [firstReviews, firstLuoReviews] = await Promise.all([
+        db.getAllReviews({ limit: 50 }).catch(() => []),
+        db.getAllLuoReviews({ limit: 50 }).catch(() => [])
+      ])
+      setReviews([...firstReviews, ...firstLuoReviews])
       
       // Show UI immediately with first batches
       setLoading(false)
@@ -462,10 +468,14 @@ export default function AdminDashboardPage() {
       setTimeout(async () => {
         try {
           console.log("🔄 Loading remaining recordings in background...")
-          const allRecordings = await db.getAllRecordings()
-          if (allRecordings.length > firstRecordings.length) {
-            console.log(`✅ Background load complete: ${allRecordings.length} total recordings`)
-            setRecordings(allRecordings)
+          const [allRecordings, allLuoRecordings] = await Promise.all([
+            db.getAllRecordings().catch(() => []),
+            db.getAllLuoRecordings().catch(() => [])
+          ])
+          const allCombined = [...allRecordings, ...allLuoRecordings]
+          if (allCombined.length > firstRecordings.length + firstLuoRecordings.length) {
+            console.log(`✅ Background load complete: ${allCombined.length} total recordings (${allRecordings.length} from recordings, ${allLuoRecordings.length} from luo)`)
+            setRecordings(allCombined)
           }
         } catch (error) {
           console.error('Background recordings load failed:', error)
@@ -475,10 +485,14 @@ export default function AdminDashboardPage() {
       setTimeout(async () => {
         try {
           console.log("🔄 Loading remaining reviews in background...")
-          const allReviews = await db.getAllReviews()
-          if (allReviews.length > firstReviews.length) {
-            console.log(`✅ Background load complete: ${allReviews.length} total reviews`)
-            setReviews(allReviews)
+          const [allReviews, allLuoReviews] = await Promise.all([
+            db.getAllReviews().catch(() => []),
+            db.getAllLuoReviews().catch(() => [])
+          ])
+          const allCombined = [...allReviews, ...allLuoReviews]
+          if (allCombined.length > firstReviews.length + firstLuoReviews.length) {
+            console.log(`✅ Background load complete: ${allCombined.length} total reviews (${allReviews.length} from reviews, ${allLuoReviews.length} from luo_reviews)`)
+            setReviews(allCombined)
           }
         } catch (error) {
           console.error('Background reviews load failed:', error)
@@ -538,23 +552,25 @@ export default function AdminDashboardPage() {
       }
       
       console.log("Refreshing admin data...")
-      const [allUsers, allUserStats, allRecordings, allReviews, stats] = await Promise.all([
+      const [allUsers, allUserStats, allRecordings, allLuoRecordings, allReviews, allLuoReviews, stats] = await Promise.all([
         db.getAllUsers(),
         db.getAllUserStats(),
-        db.getAllRecordings(),
-        db.getAllReviews(),
+        db.getAllRecordings().catch(() => []),
+        db.getAllLuoRecordings().catch(() => []),
+        db.getAllReviews().catch(() => []),
+        db.getAllLuoReviews().catch(() => []),
         db.getSystemStats(),
       ])
 
       console.log("Refreshed users:", allUsers.length)
       console.log("Refreshed user stats:", allUserStats.length)
-      console.log("Refreshed recordings:", allRecordings.length)
-      console.log("Refreshed reviews:", allReviews.length)
+      console.log("Refreshed recordings:", allRecordings.length + allLuoRecordings.length, `(${allRecordings.length} from recordings, ${allLuoRecordings.length} from luo)`)
+      console.log("Refreshed reviews:", allReviews.length + allLuoReviews.length, `(${allReviews.length} from reviews, ${allLuoReviews.length} from luo_reviews)`)
       
       setUsers(allUsers)
       setUserStats(allUserStats)
-      setRecordings(allRecordings)
-      setReviews(allReviews)
+      setRecordings([...allRecordings, ...allLuoRecordings])
+      setReviews([...allReviews, ...allLuoReviews])
       setSystemStats(stats)
       
       toast({

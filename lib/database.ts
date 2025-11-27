@@ -1662,6 +1662,175 @@ class SupabaseDatabase {
     }
   }
 
+  // NEW: Get all luo recordings (for admin/reviewer dashboards)
+  async getAllLuoRecordings(options?: { limit?: number }): Promise<LuoRecording[]> {
+    try {
+      // If limit is specified, use it directly
+      if (options?.limit) {
+        const { data, error } = await supabase
+          .from("luo")
+          .select("*")
+          .order("created_at", { ascending: false })
+          .limit(options.limit)
+
+        if (error) {
+          console.error("Database error getting luo recordings:", error)
+          throw new Error(`Failed to get luo recordings: ${error.message}`)
+        }
+
+        return await this.mapLuoRecordings(data || [])
+      }
+
+      // Use pagination to fetch ALL luo recordings
+      console.log(`🔄 Fetching all luo recordings with pagination...`)
+      let allRecordings: LuoRecording[] = []
+      let page = 0
+      const pageSize = 1000
+      let hasMore = true
+
+      while (hasMore) {
+        const { data: batch, error } = await supabase
+          .from("luo")
+          .select("*")
+          .order("created_at", { ascending: false })
+          .range(page * pageSize, (page + 1) * pageSize - 1)
+
+        if (error) {
+          console.error("Database error getting luo recordings batch:", error)
+          throw new Error(`Failed to get luo recordings: ${error.message}`)
+        }
+
+        if (!batch || batch.length === 0) {
+          hasMore = false
+        } else {
+          const mappedBatch = await this.mapLuoRecordings(batch)
+          allRecordings = [...allRecordings, ...mappedBatch]
+          hasMore = batch.length === pageSize
+          page++
+        }
+      }
+
+      return allRecordings
+    } catch (error) {
+      console.error("Error in getAllLuoRecordings:", error)
+      return []
+    }
+  }
+
+  // NEW: Get all luo reviews (for admin/reviewer dashboards)
+  async getAllLuoReviews(options?: { limit?: number }): Promise<any[]> {
+    try {
+      // If limit is specified, use it directly
+      if (options?.limit) {
+        const { data, error } = await supabase
+          .from("luo_reviews")
+          .select("*")
+          .order("created_at", { ascending: false })
+          .limit(options.limit)
+
+        if (error) {
+          console.error("Database error getting luo reviews:", error)
+          throw new Error(`Failed to get luo reviews: ${error.message}`)
+        }
+
+        return data || []
+      }
+
+      // Use pagination to fetch ALL luo reviews
+      console.log(`🔄 Fetching all luo reviews with pagination...`)
+      let allReviews: any[] = []
+      let page = 0
+      const pageSize = 1000
+      let hasMore = true
+
+      while (hasMore) {
+        const { data: batch, error } = await supabase
+          .from("luo_reviews")
+          .select("*")
+          .order("created_at", { ascending: false })
+          .range(page * pageSize, (page + 1) * pageSize - 1)
+
+        if (error) {
+          console.error("Database error getting luo reviews batch:", error)
+          throw new Error(`Failed to get luo reviews: ${error.message}`)
+        }
+
+        if (!batch || batch.length === 0) {
+          hasMore = false
+        } else {
+          allReviews = [...allReviews, ...batch]
+          hasMore = batch.length === pageSize
+          page++
+        }
+      }
+
+      return allReviews
+    } catch (error) {
+      console.error("Error in getAllLuoReviews:", error)
+      return []
+    }
+  }
+
+  // NEW: Get luo reviews by reviewer
+  async getLuoReviewsByReviewer(reviewerId: string, options?: { limit?: number }): Promise<any[]> {
+    try {
+      if (!reviewerId || !isValidUUID(reviewerId)) {
+        return []
+      }
+
+      // If limit is specified, use it directly
+      if (options?.limit) {
+        const { data, error } = await supabase
+          .from("luo_reviews")
+          .select("*")
+          .eq("reviewer_id", reviewerId)
+          .order("created_at", { ascending: false })
+          .limit(options.limit)
+
+        if (error) {
+          console.error("Database error getting luo reviews by reviewer:", error)
+          throw new Error(`Failed to get luo reviews by reviewer: ${error.message}`)
+        }
+
+        return data || []
+      }
+
+      // Use pagination to fetch ALL luo reviews by reviewer
+      console.log(`🔄 Fetching all luo reviews for reviewer ${reviewerId} with pagination...`)
+      let allReviews: any[] = []
+      let page = 0
+      const pageSize = 1000
+      let hasMore = true
+
+      while (hasMore) {
+        const { data: batch, error } = await supabase
+          .from("luo_reviews")
+          .select("*")
+          .eq("reviewer_id", reviewerId)
+          .order("created_at", { ascending: false })
+          .range(page * pageSize, (page + 1) * pageSize - 1)
+
+        if (error) {
+          console.error("Database error getting luo reviews by reviewer batch:", error)
+          throw new Error(`Failed to get luo reviews by reviewer: ${error.message}`)
+        }
+
+        if (!batch || batch.length === 0) {
+          hasMore = false
+        } else {
+          allReviews = [...allReviews, ...batch]
+          hasMore = batch.length === pageSize
+          page++
+        }
+      }
+
+      return allReviews
+    } catch (error) {
+      console.error("Error in getLuoReviewsByReviewer:", error)
+      return []
+    }
+  }
+
   async getReviewsByReviewer(reviewerId: string, options?: { limit?: number }): Promise<Review[]> {
     try {
       if (!reviewerId || !isValidUUID(reviewerId)) {
@@ -1840,76 +2009,104 @@ class SupabaseDatabase {
         .select("*", { count: "exact", head: true })
         .eq("is_active", true)
 
-      // Get recording counts using COUNT queries (FIXED: No longer limited to 1000)
-      const { count: totalRecordings, error: totalRecordingsError } = await supabase
+      // Get recording counts from both recordings and luo tables
+      // Recordings table counts
+      const { count: totalRecordingsOld, error: totalRecordingsError } = await supabase
         .from("recordings")
         .select("*", { count: "exact", head: true })
       
-      // Count pending recordings
-      const { count: pendingRecordings, error: pendingRecordingsError } = await supabase
+      const { count: pendingRecordingsOld, error: pendingRecordingsError } = await supabase
         .from("recordings")
         .select("*", { count: "exact", head: true })
         .eq("status", "pending")
       
-      const { count: validatedRecordings, error: validatedRecordingsError } = await supabase
+      const { count: validatedRecordingsOld, error: validatedRecordingsError } = await supabase
         .from("recordings")
         .select("*", { count: "exact", head: true })
         .eq("status", "approved")
       
-      // Count edited transcriptions (recordings where transcription_edited = true)
-      const { count: editedRecordings, error: editedRecordingsError } = await supabase
+      const { count: editedRecordingsOld, error: editedRecordingsError } = await supabase
         .from("recordings")
         .select("*", { count: "exact", head: true })
         .eq("transcription_edited", true)
+      
+      // Luo table counts
+      const { count: totalRecordingsLuo, error: totalRecordingsLuoError } = await supabase
+        .from("luo")
+        .select("*", { count: "exact", head: true })
+      
+      const { count: pendingRecordingsLuo, error: pendingRecordingsLuoError } = await supabase
+        .from("luo")
+        .select("*", { count: "exact", head: true })
+        .or("status.eq.pending,status.is.null")
+      
+      const { count: validatedRecordingsLuo, error: validatedRecordingsLuoError } = await supabase
+        .from("luo")
+        .select("*", { count: "exact", head: true })
+        .eq("status", "approved")
+      
+      const { count: rejectedRecordingsLuo, error: rejectedRecordingsLuoError } = await supabase
+        .from("luo")
+        .select("*", { count: "exact", head: true })
+        .eq("status", "rejected")
+      
+      // Combine counts from both tables
+      const totalRecordings = (totalRecordingsOld || 0) + (totalRecordingsLuo || 0)
+      const pendingRecordings = (pendingRecordingsOld || 0) + (pendingRecordingsLuo || 0)
+      const validatedRecordings = (validatedRecordingsOld || 0) + (validatedRecordingsLuo || 0)
+      const editedRecordings = (editedRecordingsOld || 0) // Edited is only tracked in recordings table
 
-      // Check for count errors
-      if (totalUsersError || contributorsError || reviewersError || pendingReviewersError || 
-          activeUsersError || totalRecordingsError || pendingRecordingsError || 
-          validatedRecordingsError || editedRecordingsError) {
+      // Check for count errors (log but don't fail if luo table has errors - it might not exist)
+      if (totalUsersError || contributorsError || reviewersError || pendingReviewersError || activeUsersError) {
         console.error("Database count errors:", { 
-          totalUsersError, contributorsError, reviewersError, pendingReviewersError,
-          activeUsersError, totalRecordingsError, pendingRecordingsError,
-          validatedRecordingsError, editedRecordingsError
+          totalUsersError, contributorsError, reviewersError, pendingReviewersError, activeUsersError
         })
         throw new Error("Failed to get system stats counts")
       }
+      
+      // Log luo table errors but don't fail (table might not exist or have RLS issues)
+      if (totalRecordingsLuoError || pendingRecordingsLuoError || validatedRecordingsLuoError) {
+        console.warn("⚠️ Luo table count errors (table might not exist or have RLS):", {
+          totalRecordingsLuoError, pendingRecordingsLuoError, validatedRecordingsLuoError
+        })
+      }
 
-      // Count actual validations from reviews table
-      const { count: totalValidations, error: totalValidationsError } = await supabase
+      // Count actual validations from both reviews and luo_reviews tables
+      const { count: totalValidationsOld, error: totalValidationsError } = await supabase
         .from("reviews")
         .select("*", { count: "exact", head: true })
+      
+      const { count: totalValidationsLuo, error: totalValidationsLuoError } = await supabase
+        .from("luo_reviews")
+        .select("*", { count: "exact", head: true })
+      
+      const totalValidations = (totalValidationsOld || 0) + (totalValidationsLuo || 0)
+      
+      if (totalValidationsLuoError) {
+        console.warn("⚠️ Luo reviews count error (table might not exist):", totalValidationsLuoError)
+      }
       
       // All validations result in approval (no rejection)
       const uniqueRecordingsValidated = (validatedRecordings || 0)
       
-      let totalValidationsCount: number
-      if (totalValidationsError) {
-        console.error("Error counting validations:", totalValidationsError)
-        // Fallback to calculation if count fails
-        totalValidationsCount = uniqueRecordingsValidated
-        console.warn("Using fallback calculation for totalValidations:", totalValidationsCount)
-      } else {
-        // Use actual count from reviews table
-        totalValidationsCount = totalValidations || 0
-        
-        // Log discrepancy if found (indicates duplicate validations)
-        if (totalValidationsCount !== uniqueRecordingsValidated) {
-          console.warn(`⚠️ Validation count discrepancy detected:`)
-          console.warn(`   Total validation records: ${totalValidationsCount}`)
-          console.warn(`   Unique recordings validated: ${uniqueRecordingsValidated}`)
-          console.warn(`   Difference (duplicates): ${totalValidationsCount - uniqueRecordingsValidated}`)
-          console.warn(`   This indicates duplicate validations exist in the database.`)
-          console.warn(`   Run the cleanup script to remove duplicates.`)
-        }
+      let totalValidationsCount: number = totalValidations || 0
+      
+      // Log discrepancy if found (indicates duplicate validations)
+      if (totalValidationsCount !== uniqueRecordingsValidated && totalValidationsCount > 0) {
+        console.warn(`⚠️ Validation count discrepancy detected:`)
+        console.warn(`   Total validation records: ${totalValidationsCount}`)
+        console.warn(`   Unique recordings validated: ${uniqueRecordingsValidated}`)
+        console.warn(`   Difference: ${totalValidationsCount - uniqueRecordingsValidated}`)
       }
 
-      // FIXED: Use pagination to fetch ALL recordings for duration calculations (not limited to 1000)
+      // FIXED: Use pagination to fetch ALL recordings for duration calculations (both tables)
       console.log("🔄 Fetching all recordings for duration calculations (pagination)...")
       let allRecordings: Array<{ status: string; duration: number | string }> = []
       let recordingsPage = 0
       const recordingsPageSize = 1000
       let hasMoreRecordings = true
 
+      // Fetch from recordings table
       while (hasMoreRecordings) {
         const { data: recordingsBatch, error: recordingsBatchError } = await supabase
           .from("recordings")
@@ -1929,15 +2126,37 @@ class SupabaseDatabase {
           recordingsPage++
         }
       }
-      console.log(`✅ Fetched ${allRecordings.length} recordings for duration calculations`)
+      
+      // Fetch from luo table
+      let luoRecordingsPage = 0
+      let hasMoreLuoRecordings = true
+      while (hasMoreLuoRecordings) {
+        const { data: luoBatch, error: luoBatchError } = await supabase
+          .from("luo")
+          .select("status, duration")
+          .range(luoRecordingsPage * recordingsPageSize, (luoRecordingsPage + 1) * recordingsPageSize - 1)
+        
+        if (luoBatchError) {
+          console.warn("⚠️ Error fetching luo recordings batch (might not exist):", luoBatchError)
+          hasMoreLuoRecordings = false
+        } else if (!luoBatch || luoBatch.length === 0) {
+          hasMoreLuoRecordings = false
+        } else {
+          allRecordings = [...allRecordings, ...luoBatch]
+          hasMoreLuoRecordings = luoBatch.length === recordingsPageSize
+          luoRecordingsPage++
+        }
+      }
+      console.log(`✅ Fetched ${allRecordings.length} recordings for duration calculations (${recordingsPage * recordingsPageSize} from recordings, ${luoRecordingsPage * recordingsPageSize} from luo)`)
 
-      // FIXED: Use pagination to fetch ALL reviews for time calculations (not limited to 1000)
+      // FIXED: Use pagination to fetch ALL reviews for time calculations (both tables)
       console.log("🔄 Fetching all reviews for time calculations (pagination)...")
       let allReviews: Array<{ time_spent: number }> = []
       let reviewsPage = 0
       const reviewsPageSize = 1000
       let hasMoreReviews = true
 
+      // Fetch from reviews table
       while (hasMoreReviews) {
         const { data: reviewsBatch, error: reviewsBatchError } = await supabase
           .from("reviews")
@@ -1957,7 +2176,28 @@ class SupabaseDatabase {
           reviewsPage++
         }
       }
-      console.log(`✅ Fetched ${allReviews.length} reviews for time calculations`)
+      
+      // Fetch from luo_reviews table
+      let luoReviewsPage = 0
+      let hasMoreLuoReviews = true
+      while (hasMoreLuoReviews) {
+        const { data: luoReviewsBatch, error: luoReviewsBatchError } = await supabase
+          .from("luo_reviews")
+          .select("time_spent")
+          .range(luoReviewsPage * reviewsPageSize, (luoReviewsPage + 1) * reviewsPageSize - 1)
+        
+        if (luoReviewsBatchError) {
+          console.warn("⚠️ Error fetching luo reviews batch (might not exist):", luoReviewsBatchError)
+          hasMoreLuoReviews = false
+        } else if (!luoReviewsBatch || luoReviewsBatch.length === 0) {
+          hasMoreLuoReviews = false
+        } else {
+          allReviews = [...allReviews, ...luoReviewsBatch]
+          hasMoreLuoReviews = luoReviewsBatch.length === reviewsPageSize
+          luoReviewsPage++
+        }
+      }
+      console.log(`✅ Fetched ${allReviews.length} reviews for time calculations (${reviewsPage * reviewsPageSize} from reviews, ${luoReviewsPage * reviewsPageSize} from luo_reviews)`)
       
       // Calculate aggregates efficiently
       const durations = allRecordings.map(r => parseFloat(String(r.duration || 0)))
@@ -2079,11 +2319,13 @@ class SupabaseDatabase {
           return recordings
         })(),
         (async () => {
-          let reviews: Review[] = []
+          // Fetch from both reviews and luo_reviews tables
+          let reviews: any[] = []
           let page = 0
           const pageSize = 1000
           let hasMore = true
 
+          // Fetch from reviews table
           while (hasMore) {
             const { data: batch, error } = await supabase
               .from("reviews")
@@ -2100,11 +2342,35 @@ class SupabaseDatabase {
             if (!batch || batch.length === 0) {
               hasMore = false
             } else {
-              reviews = [...reviews, ...(batch as Review[])]
+              reviews = [...reviews, ...batch]
               hasMore = batch.length === pageSize
               page++
             }
           }
+          
+          // Fetch from luo_reviews table
+          let luoPage = 0
+          let hasMoreLuo = true
+          while (hasMoreLuo) {
+            const { data: luoBatch, error: luoError } = await supabase
+              .from("luo_reviews")
+              .select("id, decision, confidence, time_spent")
+              .eq("reviewer_id", userId)
+              .order("created_at", { ascending: false })
+              .range(luoPage * pageSize, (luoPage + 1) * pageSize - 1)
+            
+            if (luoError) {
+              console.warn("⚠️ Error fetching luo reviews (might not exist):", luoError)
+              hasMoreLuo = false
+            } else if (!luoBatch || luoBatch.length === 0) {
+              hasMoreLuo = false
+            } else {
+              reviews = [...reviews, ...luoBatch]
+              hasMoreLuo = luoBatch.length === pageSize
+              luoPage++
+            }
+          }
+          
           return reviews
         })()
       ])
