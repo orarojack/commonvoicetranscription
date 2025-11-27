@@ -6,6 +6,14 @@ export type User = Database["public"]["Tables"]["users"]["Row"]
 export type Recording = Database["public"]["Tables"]["recordings"]["Row"]
 export type Review = Database["public"]["Tables"]["reviews"]["Row"]
 
+// Luo table type - compatible with Recording type for use in listen page
+// Maps luo table columns (which may use 'transcription' instead of 'sentence') to Recording format
+export type LuoRecording = Omit<Recording, 'sentence'> & {
+  sentence: string  // Always present after mapping
+  transcription?: string  // Original column name in luo table (if different)
+  [key: string]: any  // Allow for other columns
+}
+
 export interface UserStats {
   userId: string
   totalRecordings: number
@@ -445,7 +453,7 @@ class SupabaseDatabase {
     }
   }
 
-  async getUsersByRole(role: User["role"]): Promise<User[]> {
+  async getUsersByRole(role: "contributor" | "reviewer" | "admin"): Promise<User[]> {
     try {
       // FIXED: Use pagination to fetch ALL users by role (not limited to 1000 rows)
       console.log(`🔄 Fetching all users with role "${role}" with pagination...`)
@@ -647,14 +655,21 @@ class SupabaseDatabase {
     }
   }
 
-  async getRecordingsByStatus(status: Recording["status"], options?: { limit?: number }): Promise<Recording[]> {
+  async getRecordingsByStatus(status: Recording["status"], options?: { limit?: number; language?: string }): Promise<Recording[]> {
     try {
       // If limit is specified, use it directly (for performance when only need a few records)
       if (options?.limit) {
-        const { data, error } = await supabase
+        let query = supabase
           .from("recordings")
           .select("*")
           .eq("status", status)
+        
+        // Filter by language at database level if specified
+        if (options?.language) {
+          query = query.eq("language", options.language)
+        }
+        
+        const { data, error } = await query
           .order("created_at", { ascending: false })
           .limit(options.limit)
 
@@ -674,10 +689,17 @@ class SupabaseDatabase {
       let hasMore = true
 
       while (hasMore) {
-        const { data: recordingsBatch, error: batchError } = await supabase
+        let query = supabase
           .from("recordings")
           .select("*")
           .eq("status", status)
+        
+        // Filter by language at database level if specified
+        if (options?.language) {
+          query = query.eq("language", options.language)
+        }
+        
+        const { data: recordingsBatch, error: batchError } = await query
           .order("created_at", { ascending: false })
           .range(page * pageSize, (page + 1) * pageSize - 1)
 
@@ -705,10 +727,369 @@ class SupabaseDatabase {
   async getRecordingsByStatusExcludingUser(
     status: Recording["status"], 
     userId: string,
-    options?: { limit?: number }
+    options?: { limit?: number; language?: string }
   ): Promise<Recording[]> {
     // Use optimized batch-fetch method directly (more reliable than JOIN)
     return await this.getRecordingsByStatusExcludingUserLegacy(status, userId, options)
+  }
+
+  // Helper: Map luo table records to LuoRecording format
+  // luo table columns: id, status, language, sentence, actualSentence, translatedText, audio_url, user_id, duration, etc.
+  private mapLuoRecordings(data: any[]): LuoRecording[] {
+    const mapped = data.map((rec: any) => {
+      const mapped: any = {
+        ...rec,
+        // Map to sentence field - prioritize cleaned_transcript first, then fallback to others
+        sentence: rec.cleaned_transcript || rec.actualSentence || rec.sentence || rec.translatedText || rec.audio_transcript || '', 
+        // Ensure we have the required fields for Recording type
+        user_id: rec.user_id || '', // luo table has user_id as text
+        duration: rec.duration || 0,
+        status: rec.status || 'pending', // Default to pending if null
+      }
+      // Handle audio_url - luo table has audio_url and mediaPathId columns
+      // Prefer audio_url, fallback to mediaPathId
+      let audioPath = rec.audio_url || rec.mediaPathId || ''
+      
+      if (audioPath) {
+        // If it's already a full URL, use it as-is
+        if (audioPath.startsWith('http://') || audioPath.startsWith('https://') || audioPath.startsWith('data:')) {
+          mapped.audio_url = audioPath
+          console.log(`🔊 Using existing full URL: ${audioPath.substring(0, 100)}...`)
+        } else {
+          // It's a filename - construct full URL to luo bucket
+          const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
+          if (supabaseUrl) {
+            // Clean filename (remove trailing underscores/spaces)
+            let filename = audioPath.trim().replace(/[_\s]+$/, '')
+            
+            // Check if filename already has an extension
+            const hasExtension = filename.match(/\.(wav|mp3|ogg|webm|m4a|flac|aac|opus)$/i)
+            
+            if (!hasExtension) {
+              // No extension found - store original for potential retry with different extensions
+              mapped._originalFilename = filename
+              // Try .wav first (most common for this project based on user's mention)
+              filename = `${filename}.wav`
+              console.log(`🔊 No extension found, adding .wav: ${filename}`)
+              // Store alternative extensions to try if .wav fails
+              mapped._alternativeExtensions = ['.mp3', '.ogg', '.webm', '.m4a']
+            } else {
+              console.log(`🔊 Filename has extension: ${filename}`)
+            }
+            
+            mapped.audio_url = `${supabaseUrl}/storage/v1/object/public/luo/${encodeURIComponent(filename)}`
+            console.log(`🔊 Constructed audio URL: ${mapped.audio_url}`)
+          } else {
+            mapped.audio_url = audioPath
+            console.warn(`⚠️ No Supabase URL configured, using raw path: ${audioPath}`)
+          }
+        }
+      } else {
+        console.warn(`⚠️ No audio_url or mediaPathId found for recording ${rec.id}`)
+      }
+      return mapped as LuoRecording
+    })
+    
+    console.log(`📦 Mapped ${mapped.length} luo recordings. Sample:`, mapped[0] ? {
+      id: mapped[0].id,
+      sentence: mapped[0].sentence?.substring(0, 50),
+      audio_url: mapped[0].audio_url?.substring(0, 100),
+      status: mapped[0].status,
+      language: mapped[0].language
+    } : 'none')
+    
+    return mapped
+  }
+
+  // Helper: Inspect luo table structure to understand actual schema
+  // Based on actual luo table: id, mediaPathId, recorder_uuid, domain, translatedText, 
+  // actualSentence, duration, languageId, language, promptType, audio_transcript, review,
+  // type, cleaned_transcript, word_count, ratio, split, status, sentence, audio_url, 
+  // user_id, created_at, updated_at
+  private async inspectLuoTableStructure(): Promise<{
+    hasStatusColumn: boolean
+    statusValues: string[]
+    hasLanguageColumn: boolean
+    languageValues: string[]
+    hasSentenceColumn: boolean
+    hasActualSentenceColumn: boolean
+    hasTranslatedTextColumn: boolean
+    hasAudioUrlColumn: boolean
+    sampleRow: any
+  }> {
+    try {
+      // Get a sample row to understand structure
+      const { data: sample, error } = await supabase
+        .from("luo")
+        .select("*")
+        .limit(1)
+      
+      if (error || !sample || sample.length === 0) {
+        console.warn("⚠️ Could not inspect luo table structure:", error)
+        return {
+          hasStatusColumn: false,
+          statusValues: [],
+          hasLanguageColumn: false,
+          languageValues: [],
+        hasSentenceColumn: false,
+        hasActualSentenceColumn: false,
+        hasTranslatedTextColumn: false,
+        hasAudioUrlColumn: false,
+        sampleRow: null
+        }
+      }
+      
+      const row = sample[0]
+      const columns = Object.keys(row)
+      
+      // Check what status values exist
+      const { data: statusData } = await supabase
+        .from("luo")
+        .select("status")
+        .limit(100)
+      
+      const statusValues = statusData ? [...new Set(statusData.map(r => r?.status).filter(Boolean))] : []
+      
+      // Check language values
+      const { data: langData } = await supabase
+        .from("luo")
+        .select("language")
+        .limit(100)
+      
+      const languageValues = langData ? [...new Set(langData.map(r => r?.language).filter(Boolean))] : []
+      
+      return {
+        hasStatusColumn: columns.includes('status'),
+        statusValues: statusValues as string[],
+        hasLanguageColumn: columns.includes('language'),
+        languageValues: languageValues as string[],
+        hasSentenceColumn: columns.includes('sentence'),
+        hasActualSentenceColumn: columns.includes('actualSentence'),
+        hasTranslatedTextColumn: columns.includes('translatedText'),
+        hasAudioUrlColumn: columns.includes('audio_url'),
+        sampleRow: row
+      }
+    } catch (error) {
+      console.error("Error inspecting luo table:", error)
+      return {
+        hasStatusColumn: false,
+        statusValues: [],
+        hasLanguageColumn: false,
+        languageValues: [],
+        hasSentenceColumn: false,
+        hasActualSentenceColumn: false,
+        hasTranslatedTextColumn: false,
+        hasAudioUrlColumn: false,
+        sampleRow: null
+      }
+    }
+  }
+
+  // NEW: Get recordings from luo table by status (for direct CSV imports)
+  async getLuoRecordingsByStatus(
+    status: "pending" | "approved", 
+    options?: { limit?: number; language?: string }
+  ): Promise<LuoRecording[]> {
+    try {
+      console.log(`🔍 Querying luo table: status="${status}", language="${options?.language || 'all'}", limit=${options?.limit || 'none'}`)
+      
+      // First, inspect the table structure to understand what we're working with
+      const structure = await this.inspectLuoTableStructure()
+      console.log(`📋 Luo table structure:`, {
+        hasStatus: structure.hasStatusColumn,
+        statusValues: structure.statusValues.slice(0, 5),
+        hasLanguage: structure.hasLanguageColumn,
+        hasSentence: structure.hasSentenceColumn,
+        hasTranscription: structure.hasTranslatedTextColumn,
+        hasAudioUrl: structure.hasAudioUrlColumn,
+        sampleColumns: structure.sampleRow ? Object.keys(structure.sampleRow) : []
+      })
+      
+      // If limit is specified, use it directly (for performance when only need a few records)
+      if (options?.limit) {
+        let query = supabase
+          .from("luo")
+          .select("*")
+        
+        // Simple direct query - luo table has status column with default 'pending'
+        query = query.eq("status", "pending")
+        console.log(`✅ Querying luo table for status='pending'`)
+        
+        // Filter by language at database level if specified
+        if (options?.language) {
+          query = query.ilike("language", `%${options.language}%`)
+          console.log(`🌍 Filtering by language: "${options.language}"`)
+        }
+        
+        const { data, error } = await query
+          .order("created_at", { ascending: false })
+          .limit(options.limit)
+
+        if (error) {
+          console.error("❌ Database error:", error)
+          // Try without filters to check if table is accessible
+          const { data: testData, error: testError } = await supabase
+            .from("luo")
+            .select("id, status, language")
+            .limit(5)
+          
+          if (testError) {
+            console.error("❌ Table access error:", testError)
+            console.error("⚠️ This is likely an RLS (Row Level Security) issue!")
+            console.error("💡 Check Supabase dashboard > Authentication > Policies for 'luo' table")
+          } else {
+            console.log(`📋 Test query successful. Found ${testData?.length || 0} rows`)
+            if (testData && testData.length > 0) {
+              console.log(`📋 Status values found:`, [...new Set(testData.map(r => r.status))])
+            }
+          }
+          throw new Error(`Failed to get luo recordings: ${error.message}`)
+        }
+
+        console.log(`✅ Found ${data?.length || 0} luo recordings`)
+        
+        // If no results, debug by checking what's actually in the table
+        if (!data || data.length === 0) {
+          console.warn(`⚠️ No results. Checking table contents...`)
+          const { data: allData, error: allError } = await supabase
+            .from("luo")
+            .select("id, status, language")
+            .limit(10)
+          
+          if (!allError && allData) {
+            console.log(`📋 Total rows accessible: ${allData.length}`)
+            if (allData.length > 0) {
+              const statuses = [...new Set(allData.map(r => r.status))]
+              console.log(`📋 Status values in table:`, statuses)
+              console.log(`📋 Sample row:`, allData[0])
+            } else {
+              console.warn(`⚠️ Table is accessible but has 0 rows, or RLS is blocking all rows`)
+            }
+          }
+        }
+
+        return this.mapLuoRecordings(data || [])
+      }
+
+      // Use pagination to fetch ALL recordings by status
+      console.log(`🔄 Fetching all ${status} luo recordings with pagination...`)
+      
+      // Reuse structure info from earlier inspection (or inspect again if not available)
+      const structureForPagination = structure || await this.inspectLuoTableStructure()
+      
+      let allRecordings: LuoRecording[] = []
+      let page = 0
+      const pageSize = 1000
+      let hasMore = true
+
+      while (hasMore) {
+        let query = supabase
+          .from("luo")
+          .select("*")
+        
+        // Handle status filtering - simple direct query
+        query = query.eq("status", status === "pending" ? "pending" : status)
+        
+        // Filter by language at database level if specified
+        // Use case-insensitive matching
+        if (options?.language) {
+          query = query.ilike("language", `%${options.language}%`)
+        }
+        
+        const { data: recordingsBatch, error: batchError } = await query
+          .order("created_at", { ascending: false })
+          .range(page * pageSize, (page + 1) * pageSize - 1)
+
+        if (batchError) {
+          console.error("Database error getting luo recordings by status batch:", batchError)
+          throw new Error(`Failed to get luo recordings by status: ${batchError.message}`)
+        }
+
+        if (!recordingsBatch || recordingsBatch.length === 0) {
+          hasMore = false
+        } else {
+          // Map luo table columns to Recording format
+          const mappedBatch = this.mapLuoRecordings(recordingsBatch)
+          allRecordings = [...allRecordings, ...mappedBatch]
+          hasMore = recordingsBatch.length === pageSize
+          page++
+        }
+      }
+
+      return allRecordings
+    } catch (error) {
+      console.error("Error in getLuoRecordingsByStatus:", error)
+      return []
+    }
+  }
+
+  // NEW: Get luo recordings excluding those already reviewed by the reviewer
+  // Filters by validator's selected language
+  async getLuoRecordingsExcludingReviewedByUser(
+    status: "pending" | "approved", 
+    reviewerId: string,
+    options?: { limit?: number; language?: string }
+  ): Promise<LuoRecording[]> {
+    try {
+      if (!reviewerId || !isValidUUID(reviewerId)) {
+        return await this.getLuoRecordingsByStatus(status, options)
+      }
+
+      // Get reviewer's language from their profile
+      let reviewerLanguage: string | null = null
+      if (options?.language) {
+        reviewerLanguage = options.language
+      } else {
+        try {
+          const reviewer = await this.getUserById(reviewerId)
+          if (reviewer && reviewer.languages && reviewer.languages.length > 0) {
+            reviewerLanguage = reviewer.languages[0]
+          }
+        } catch (userError) {
+          console.warn("Could not fetch reviewer language, will show all languages:", userError)
+        }
+      }
+
+      // First, get recordings the reviewer has already reviewed
+      // Note: reviews table references recordings.id, so we need to check if luo.id matches
+      let reviews: Review[] = []
+      try {
+        reviews = await this.getReviewsByReviewer(reviewerId)
+      } catch (reviewError) {
+        console.error("🚨 CRITICAL: Failed to fetch reviewer's reviews. Cannot prevent duplicate reviews!", reviewError)
+        throw new Error("Failed to load reviewer data. Please try again. This prevents duplicate reviews.")
+      }
+      
+      const reviewedRecordingIds = new Set(reviews.map(r => r.recording_id))
+
+      // Fetch pending recordings from luo table
+      const fetchOptions = { ...options, language: reviewerLanguage || undefined }
+      let allRecordings = await this.getLuoRecordingsByStatus(status, fetchOptions)
+
+      // If language filtering returns no results, try without language filter (fallback)
+      if (reviewerLanguage && allRecordings.length === 0) {
+        console.warn(`⚠️ No recordings found with language "${reviewerLanguage}", falling back to all languages`)
+        const fallbackOptions = { ...options, language: undefined }
+        allRecordings = await this.getLuoRecordingsByStatus(status, fallbackOptions)
+      }
+
+      // Language filtering is done at database level, but log for debugging
+      if (reviewerLanguage) {
+        console.log(`🌍 Filtered luo recordings by language "${reviewerLanguage}" at database level: ${allRecordings.length} recordings match`)
+      }
+
+      // Filter out recordings the reviewer has already reviewed
+      const availableRecordings = allRecordings.filter(
+        recording => !reviewedRecordingIds.has(recording.id)
+      )
+
+      console.log(`📊 Reviewer ${reviewerId} (${reviewerLanguage || 'all languages'}): ${allRecordings.length} pending luo recordings, ${reviewedRecordingIds.size} already reviewed, ${availableRecordings.length} available`)
+      
+      return availableRecordings
+    } catch (error) {
+      console.error("Error in getLuoRecordingsExcludingReviewedByUser:", error)
+      throw error
+    }
   }
 
   // FIXED: Get pending recordings excluding those already reviewed by the reviewer
@@ -751,14 +1132,13 @@ class SupabaseDatabase {
       const reviewedRecordingIds = new Set(reviews.map(r => r.recording_id))
 
       // Fetch pending recordings excluding user's own recordings
-      let allRecordings = await this.getRecordingsByStatusExcludingUser(status, reviewerId, options)
+      // Language filtering is now done at database level for better performance
+      const fetchOptions = { ...options, language: reviewerLanguage || undefined }
+      let allRecordings = await this.getRecordingsByStatusExcludingUser(status, reviewerId, fetchOptions)
 
-      // Filter by language if reviewer has a language selected
+      // Language filtering is now done at database level, but log for debugging
       if (reviewerLanguage) {
-        allRecordings = allRecordings.filter(
-          recording => (recording as any).language === reviewerLanguage
-        )
-        console.log(`🌍 Filtering by language "${reviewerLanguage}": ${allRecordings.length} recordings match`)
+        console.log(`🌍 Filtered by language "${reviewerLanguage}" at database level: ${allRecordings.length} recordings match`)
       }
 
       // Filter out recordings the reviewer has already reviewed
@@ -778,10 +1158,11 @@ class SupabaseDatabase {
   }
 
   // Legacy method as fallback (keeps old N+1 query behavior but with limit support)
+  // NEW: Supports language filtering at database level
   async getRecordingsByStatusExcludingUserLegacy(
     status: Recording["status"], 
     userId: string,
-    options?: { limit?: number }
+    options?: { limit?: number; language?: string }
   ): Promise<Recording[]> {
     try {
       if (!userId || !isValidUUID(userId)) {
@@ -795,10 +1176,18 @@ class SupabaseDatabase {
 
       // If limit is specified, use optimized path
       if (options?.limit) {
-        const { data: allRecordings, error } = await supabase
+        let query = supabase
           .from("recordings")
           .select("*")
           .eq("status", status)
+        
+        // Filter by language at database level if specified
+        if (options?.language) {
+          query = query.eq("language", options.language)
+          console.log(`🌍 Filtering by language "${options.language}" at database level`)
+        }
+        
+        const { data: allRecordings, error } = await query
           .order("created_at", { ascending: false })
           .limit(options.limit * 3) // Fetch 3x to account for filtering
 
@@ -854,10 +1243,17 @@ class SupabaseDatabase {
       const usersMap = new Map<string, User | null>()
 
       while (hasMore) {
-        const { data: recordingsBatch, error: batchError } = await supabase
+        let query = supabase
           .from("recordings")
           .select("*")
           .eq("status", status)
+        
+        // Filter by language at database level if specified
+        if (options?.language) {
+          query = query.eq("language", options.language)
+        }
+        
+        const { data: recordingsBatch, error: batchError } = await query
           .order("created_at", { ascending: false })
           .range(page * pageSize, (page + 1) * pageSize - 1)
 
@@ -1115,6 +1511,88 @@ class SupabaseDatabase {
       return data
     } catch (error) {
       console.error("Error in createReview:", error)
+      throw error
+    }
+  }
+
+  // NEW: Create review for luo table recordings
+  async createLuoReview(reviewData: {
+    recording_id: string
+    reviewer_id: string
+    decision: "approved" | "rejected"
+    notes?: string | null
+    confidence: number
+    time_spent: number
+  }): Promise<any> {
+    try {
+      if (!reviewData.recording_id || !reviewData.recording_id.trim()) {
+        throw new Error("Invalid recording ID provided for review")
+      }
+
+      if (!reviewData.reviewer_id || !isValidUUID(reviewData.reviewer_id)) {
+        throw new Error("Invalid reviewer ID provided for review")
+      }
+
+      // Check if recording exists in luo table
+      const { data: recording, error: recordingError } = await supabase
+        .from("luo")
+        .select("id, status")
+        .eq("id", reviewData.recording_id)
+        .single()
+
+      if (recordingError || !recording) {
+        console.error("❌ Recording not found in luo table:", recordingError)
+        throw new Error("Recording not found in luo table")
+      }
+
+      // Check for existing reviews
+      const { count: existingReviewCount, error: countError } = await supabase
+        .from("luo_reviews")
+        .select("*", { count: "exact", head: true })
+        .eq("recording_id", reviewData.recording_id)
+        .eq("reviewer_id", reviewData.reviewer_id)
+
+      if (countError) {
+        console.error("Error checking existing luo reviews:", countError)
+        throw new Error(`Failed to check for existing reviews: ${countError.message}`)
+      }
+
+      if (existingReviewCount && existingReviewCount > 0) {
+        throw new Error("This recording has already been reviewed by you. Each recording can only be reviewed once per reviewer.")
+      }
+
+      // Insert review into luo_reviews table
+      const { data, error } = await supabase
+        .from("luo_reviews")
+        .insert({
+          recording_id: reviewData.recording_id,
+          reviewer_id: reviewData.reviewer_id,
+          decision: reviewData.decision,
+          notes: reviewData.notes || null,
+          confidence: reviewData.confidence,
+          time_spent: reviewData.time_spent,
+          created_at: new Date().toISOString(),
+        })
+        .select()
+        .single()
+
+      if (error) {
+        console.error("Database error creating luo review:", error)
+        // Check if error is due to duplicate
+        if (error.code === "23505" || error.message.includes("duplicate") || error.message.includes("unique")) {
+          throw new Error("This recording has already been reviewed by you. Each recording can only be reviewed once per reviewer.")
+        }
+        throw new Error(`Failed to create review: ${error.message}`)
+      }
+
+      if (!data) {
+        throw new Error("No data returned from review creation")
+      }
+
+      console.log("✅ Luo review created successfully:", data.id)
+      return data
+    } catch (error) {
+      console.error("Error in createLuoReview:", error)
       throw error
     }
   }
@@ -1572,12 +2050,12 @@ class SupabaseDatabase {
       // Efficient in-memory aggregations
       const totalRecordings = recordings.length
       const approvedRecordings = recordings.filter((r) => r.status === "approved").length
-      const rejectedRecordings = recordings.filter((r) => r.status === "rejected").length
+      const rejectedRecordings = recordings.filter((r) => (r.status as string) === "rejected").length
       const pendingRecordings = recordings.filter((r) => r.status === "pending").length
       
       const totalReviews = reviews.length
       const approvedReviews = reviews.filter((r) => r.decision === "approved").length
-      const rejectedReviews = reviews.filter((r) => r.decision === "rejected").length
+      const rejectedReviews = reviews.filter((r) => (r.decision as string) === "rejected").length
       
       const reviewTimes = reviews.map(r => r.time_spent || 0)
       const averageReviewTime = reviewTimes.length > 0 ? reviewTimes.reduce((sum, t) => sum + t, 0) / reviewTimes.length : 0

@@ -8,7 +8,7 @@ import { Badge } from "@/components/ui/badge"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog"
 import { Textarea } from "@/components/ui/textarea"
 import { Play, Pause, ThumbsUp, SkipForward, HelpCircle, Volume2, ChevronLeft, ChevronRight, RotateCcw, List, Edit2, Check, X, Flag } from "lucide-react"
-import { db, type Recording } from "@/lib/database"
+import { db, type Recording, type LuoRecording } from "@/lib/database"
 import { useToast } from "@/hooks/use-toast"
 import { supabase } from "@/lib/supabase"
 
@@ -48,6 +48,8 @@ export default function ListenPage() {
   const [audioLoadError, setAudioLoadError] = useState<string | null>(null)
   const [isEditingSentence, setIsEditingSentence] = useState(false)
   const [editedSentence, setEditedSentence] = useState('')
+  const [validationChoice, setValidationChoice] = useState<'yes' | 'no' | null>(null) // Yes/No validation
+  const [rejectionReason, setRejectionReason] = useState('') // Reason when No is selected
   const audioRef = useRef<HTMLAudioElement | null>(null)
   const waveformRef = useRef<HTMLDivElement | null>(null)
   const audioObjectUrlRef = useRef<string | null>(null)
@@ -63,6 +65,8 @@ export default function ListenPage() {
     // Reset editing state when recording changes
     setIsEditingSentence(false)
     setEditedSentence(currentRecording?.sentence || '')
+    setValidationChoice(null) // Reset validation choice
+    setRejectionReason('') // Reset rejection reason
   }, [currentRecording])
 
   // Real-time synchronization: Remove recordings when other reviewers validate them
@@ -238,7 +242,38 @@ export default function ListenPage() {
           }
         } else if (currentRecording.audio_url.startsWith('/') || currentRecording.audio_url.startsWith('http')) {
           // Direct file path or HTTP URL
-          console.log("🔗 Using direct URL...")
+          console.log("🔗 Using direct URL:", currentRecording.audio_url)
+          
+          // Check if URL ends with extension
+          const url = currentRecording.audio_url
+          const hasExtension = url.match(/\.(wav|mp3|ogg|webm|m4a|flac|aac|opus)$/i)
+          
+          if (!hasExtension) {
+            console.warn("⚠️ Audio URL has no extension, this might cause format errors")
+            console.warn("📝 Full URL:", url)
+            console.warn("💡 Tip: Check if the file in Supabase storage has the correct extension")
+          } else {
+            const extension = url.match(/\.([^.]+)$/i)?.[1]
+            console.log(`✅ Audio URL has extension: .${extension}`)
+          }
+          
+          // Try to verify file exists before setting src
+          try {
+            const headResponse = await fetch(url, { method: 'HEAD' })
+            if (headResponse.ok) {
+              const contentType = headResponse.headers.get('content-type')
+              console.log(`✅ File exists. Content-Type: ${contentType}`)
+              if (contentType && !contentType.startsWith('audio/')) {
+                console.warn(`⚠️ Unexpected content type: ${contentType}. Expected audio/*`)
+              }
+            } else {
+              console.warn(`⚠️ File check returned status: ${headResponse.status}`)
+            }
+          } catch (fetchError) {
+            console.warn("⚠️ Could not verify file existence (CORS or network issue):", fetchError)
+            // Continue anyway - might work for playback even if HEAD fails
+          }
+          
           audio.src = currentRecording.audio_url
         } else {
           throw new Error("Unsupported audio URL format")
@@ -285,13 +320,29 @@ export default function ListenPage() {
                 }
               }
               
+              const audioUrl = audio.src
               console.error("❌ Audio loading error:", {
                 code: error?.code,
                 message: error?.message,
                 userMessage: errorMessage,
-                src: audio.src.substring(0, 100),
-                recordingId: currentRecording.id
+                src: audioUrl,
+                recordingId: currentRecording.id,
+                fullUrl: audioUrl
               })
+              
+              // If error is format-related and URL doesn't have extension, try different extensions
+              if (error?.code === 4 && currentRecording && (currentRecording as any)._originalFilename) {
+                console.log("🔄 Attempting to fix audio URL by trying different extensions...")
+                const originalFilename = (currentRecording as any)._originalFilename
+                const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
+                
+                if (supabaseUrl && originalFilename) {
+                  // Try different extensions
+                  const extensions = ['.mp3', '.ogg', '.webm', '.m4a', '.flac']
+                  console.log(`🔄 Will try extensions: ${extensions.join(', ')}`)
+                  // Note: We'll handle this in the retry logic below
+                }
+              }
               
               cleanup()
               setAudioLoading(false)
@@ -471,9 +522,9 @@ export default function ListenPage() {
       let validatorLanguage: string | undefined = undefined
       if (user?.languages && user.languages.length > 0) {
         validatorLanguage = user.languages[0]
-        console.log(`🌍 Filtering recordings by validator's language: ${validatorLanguage}`)
+        console.log(`🌍 Filtering luo recordings by validator's language: "${validatorLanguage}"`)
       } else {
-        console.warn('⚠️ Validator has no language selected in profile. Showing all languages.')
+        console.warn('⚠️ Validator has no language selected in profile. Showing all languages from luo table.')
       }
       
       // INSTANT LOADING: Fetch only first 10 recordings with limit at database level
@@ -481,12 +532,13 @@ export default function ListenPage() {
       // NEW: Filter by validator's selected language
       console.log('⚡ Loading first batch of recordings (10)...')
       
+      // Query luo table instead of recordings table
       const firstBatch = user?.id 
-        ? await db.getRecordingsByStatusExcludingReviewedByUser("pending", user.id, { 
+        ? await db.getLuoRecordingsExcludingReviewedByUser("pending", user.id, { 
             limit: 10,
             language: validatorLanguage
           })
-        : await db.getRecordingsByStatus("pending", { limit: 10 })
+        : await db.getLuoRecordingsByStatus("pending", { limit: 10, language: validatorLanguage })
       
       // Filter helper function
       const isValidRecording = (recording: Recording): boolean => {
@@ -527,8 +579,11 @@ export default function ListenPage() {
         return false
       }
       
+      console.log(`📊 First batch from luo table: ${firstBatch.length} recordings`)
+      
       // Filter first batch for valid recordings only
       const validFirstBatch = firstBatch.filter(isValidRecording)
+      console.log(`✅ Valid recordings after filtering: ${validFirstBatch.length} out of ${firstBatch.length}`)
       
       // Randomize recordings for reviewers
       const shuffledFirstBatch = shuffleArray(validFirstBatch)
@@ -551,6 +606,12 @@ export default function ListenPage() {
         }, 0)
       } else if (firstBatch.length > 0) {
         // We have recordings but none are valid
+        console.warn(`⚠️ ${firstBatch.length} recordings found but none have valid audio URLs`)
+        console.log("Sample recording:", firstBatch[0] ? {
+          id: firstBatch[0].id,
+          audio_url: firstBatch[0].audio_url?.substring(0, 100),
+          sentence: firstBatch[0].sentence?.substring(0, 50)
+        } : 'none')
         setLoading(false)
         setTimeout(() => {
         toast({
@@ -561,7 +622,7 @@ export default function ListenPage() {
         }, 0)
       } else {
         // No pending recordings in first batch - but check in background
-        console.log("No pending recordings in first batch (checking for more in background...)")
+        console.log("⚠️ No pending recordings in first batch from luo table (checking for more in background...)")
         setLoading(false)
         // Keep currentRecording as null - will be set if background finds recordings
       }
@@ -586,11 +647,12 @@ export default function ListenPage() {
           // Fetch more recordings (without limit this time, or with a larger limit)
           // FIXED: Exclude recordings the reviewer has already reviewed
           // NEW: Filter by validator's selected language
+          // Query luo table instead of recordings table
           const moreRecordings = user?.id 
-            ? await db.getRecordingsByStatusExcludingReviewedByUser("pending", user.id, {
+            ? await db.getLuoRecordingsExcludingReviewedByUser("pending", user.id, {
                 language: validatorLanguage
               })
-            : await db.getRecordingsByStatus("pending")
+            : await db.getLuoRecordingsByStatus("pending", { language: validatorLanguage })
           
           console.log(`📊 Background load: Fetched ${moreRecordings.length} total recordings from database`)
           
@@ -827,7 +889,7 @@ export default function ListenPage() {
   }
 
 
-  const handleValidation = async (isValid: boolean) => {
+  const handleValidation = async () => {
     if (!currentRecording || !user) return
     
     // Ensure reviewer has listened to entire audio
@@ -840,51 +902,112 @@ export default function ListenPage() {
       return
     }
 
+    // Validate choice is selected
+    if (!validationChoice) {
+      toast({
+        title: "Please Select an Option",
+        description: "Please select Yes or No before submitting.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    // If No is selected, require a reason
+    if (validationChoice === 'no' && !rejectionReason.trim()) {
+      toast({
+        title: "Reason Required",
+        description: "Please provide a reason when selecting No.",
+        variant: "destructive",
+      })
+      return
+    }
+
     try {
       const timeSpent = Math.floor((Date.now() - reviewStartTime) / 1000)
 
-      // Check if sentence was edited
-      const sentenceWasEdited = editedSentence.trim() !== currentRecording.sentence.trim()
-      
-      // Update recording with new transcription validation fields
-      if (sentenceWasEdited && editedSentence.trim()) {
-        try {
-          await db.updateRecording(currentRecording.id, {
-            original_sentence: currentRecording.sentence, // Preserve original
-            sentence: editedSentence.trim(),               // Update with corrected version
-            transcription_edited: true,                    // Mark as edited
-            edited_by: user.id,                           // Track who edited
-            edited_at: new Date().toISOString(),          // Track when edited
-          })
-          console.log('✅ Recording transcription updated and tracked:', editedSentence.trim())
-        } catch (updateError) {
-          console.error('Error updating recording transcription:', updateError)
-          // Continue with review even if sentence update fails
+      if (validationChoice === 'yes') {
+        // YES: Check if sentence was edited
+        const sentenceWasEdited = editedSentence.trim() !== currentRecording.sentence.trim()
+        
+        // Update recording with new transcription validation fields if edited
+        if (sentenceWasEdited && editedSentence.trim()) {
+          try {
+            await db.updateLuoRecording(currentRecording.id, {
+              original_sentence: currentRecording.sentence, // Preserve original
+              sentence: editedSentence.trim(),               // Update with corrected version
+              transcription_edited: true,                    // Mark as edited
+              edited_by: user.id,                           // Track who edited
+              edited_at: new Date().toISOString(),          // Track when edited
+              status: "approved", // Set status to approved
+            })
+            console.log('✅ Recording transcription updated and tracked:', editedSentence.trim())
+          } catch (updateError) {
+            console.error('Error updating recording transcription:', updateError)
+            // Continue with review even if sentence update fails
+          }
+        } else {
+          // If no edit, just approve the recording
+          try {
+            await db.updateLuoRecording(currentRecording.id, {
+              status: "approved",
+              reviewed_by: user.id,
+              reviewed_at: new Date().toISOString(),
+            })
+          } catch (updateError) {
+            console.error('Error updating recording status:', updateError)
+          }
         }
+
+        // Create review notes
+        let reviewNotes = "Transcription verified as correct"
+        if (sentenceWasEdited && editedSentence.trim()) {
+          reviewNotes = `Transcription corrected from: "${currentRecording.sentence}" to: "${editedSentence.trim()}"`
+        }
+
+        // Create review (approved) - use createLuoReview for luo table recordings
+        await db.createLuoReview({
+          recording_id: currentRecording.id,
+          reviewer_id: user.id,
+          decision: "approved",
+          notes: reviewNotes,
+          confidence: Math.floor(Math.random() * 20) + 80, // 80-100% confidence
+          time_spent: timeSpent,
+        })
+
+        toast({
+          title: sentenceWasEdited ? "Transcription Corrected" : "Transcription Verified",
+          description: sentenceWasEdited 
+            ? "Recording submitted with corrected transcription" 
+            : "Recording verified - transcription is correct",
+        })
+      } else {
+        // NO: Rejected with reason
+        await db.createLuoReview({
+          recording_id: currentRecording.id,
+          reviewer_id: user.id,
+          decision: "rejected", // Use rejected decision
+          notes: `Rejected: ${rejectionReason.trim()}`,
+          confidence: 0, // Low confidence for rejected
+          time_spent: timeSpent,
+        })
+
+        // Update recording status to rejected
+        try {
+          await db.updateLuoRecording(currentRecording.id, {
+            status: "rejected", // Set to rejected
+            reviewed_by: user.id,
+            reviewed_at: new Date().toISOString(),
+          })
+        } catch (updateError) {
+          console.error('Error updating recording status:', updateError)
+        }
+
+        toast({
+          title: "Recording Rejected",
+          description: "Recording has been rejected with the provided reason.",
+          variant: "destructive",
+        })
       }
-
-      // Create review notes - include sentence edit info if applicable
-      let reviewNotes = "Transcription verified as correct"
-      if (sentenceWasEdited && editedSentence.trim()) {
-        reviewNotes = `Transcription corrected from: "${currentRecording.sentence}" to: "${editedSentence.trim()}"`
-      }
-
-      // Create review (always approved)
-      await db.createReview({
-        recording_id: currentRecording.id,
-        reviewer_id: user.id,
-        decision: "approved",
-        notes: reviewNotes,
-        confidence: Math.floor(Math.random() * 20) + 80, // 80-100% confidence
-        time_spent: timeSpent,
-      })
-
-      toast({
-        title: sentenceWasEdited ? "Transcription Edited" : "Transcription Passed",
-        description: sentenceWasEdited 
-          ? "Recording submitted with edited transcription" 
-          : "Recording passed - transcription is correct",
-      })
 
       // Mark this recording as reviewed - prevent it from appearing again
       setReviewedRecordingIds(prev => new Set([...prev, currentRecording.id]))
@@ -906,6 +1029,8 @@ export default function ListenPage() {
         setHasListenedToEnd(false) // Reset for next recording
         setIsEditingSentence(false) // Reset editing state
         setEditedSentence('') // Clear edited sentence
+        setValidationChoice(null) // Reset validation choice
+        setRejectionReason('') // Reset rejection reason
       } else {
         // No more recordings to review
         setCurrentRecording(null)
@@ -973,6 +1098,8 @@ export default function ListenPage() {
     // Reset editing state
     setIsEditingSentence(false)
     setEditedSentence('')
+    setValidationChoice(null)
+    setRejectionReason('')
 
     if (remainingRecordings.length > 0) {
       setCurrentRecording(remainingRecordings[0])
@@ -1318,7 +1445,7 @@ export default function ListenPage() {
                 {/* Sentence Display - Fixed height container */}
                   <div className="bg-gradient-to-r from-gray-50 to-gray-100 rounded-xl p-4 h-[120px] flex items-center justify-center border-2 border-gray-300 shadow-md overflow-hidden">
                     <div className="w-full px-2 h-full flex flex-col">
-                      {isEditingSentence ? (
+                      {isEditingSentence && validationChoice === 'yes' ? (
                         <div className="space-y-2 w-full h-full flex flex-col">
                           <Textarea
                             value={editedSentence}
@@ -1363,18 +1490,25 @@ export default function ListenPage() {
                           <p className="text-base sm:text-lg font-semibold text-gray-900 leading-relaxed tracking-wide flex-1 text-center drop-shadow-sm" style={{ fontFamily: 'Poppins, sans-serif' }}>
                             {editedSentence || currentRecording.sentence}
                           </p>
-                          <Button
-                            onClick={() => {
-                              setIsEditingSentence(true)
-                              setEditedSentence(currentRecording.sentence)
-                            }}
-                            variant="ghost"
-                            size="sm"
-                            className="flex-shrink-0 hover:bg-gray-200 rounded-lg p-1.5 h-7 w-7 border border-gray-200"
-                            title="Edit sentence"
-                          >
-                            <Edit2 className="h-3 w-3 text-gray-700" />
-                          </Button>
+                          {/* Only show edit button if Yes is selected or not yet selected */}
+                          {validationChoice !== 'no' && (
+                            <Button
+                              onClick={() => {
+                                setIsEditingSentence(true)
+                                setEditedSentence(currentRecording.sentence)
+                                // Auto-select Yes when editing
+                                if (!validationChoice) {
+                                  setValidationChoice('yes')
+                                }
+                              }}
+                              variant="ghost"
+                              size="sm"
+                              className="flex-shrink-0 hover:bg-gray-200 rounded-lg p-1.5 h-7 w-7 border border-gray-200"
+                              title="Edit sentence"
+                            >
+                              <Edit2 className="h-3 w-3 text-gray-700" />
+                            </Button>
+                          )}
                         </div>
                       )}
                     </div>
@@ -1462,33 +1596,101 @@ export default function ListenPage() {
                     </div>
                   )}
                   
-                  <div className="flex justify-center px-4 sm:px-0 gap-3">
-                    {editedSentence.trim() !== currentRecording.sentence.trim() && editedSentence.trim() ? (
-                      <Button
-                        onClick={() => handleValidation(true)}
-                        size="default"
-                        disabled={!hasListenedToEnd}
-                        className={`flex items-center gap-2 h-auto py-3 px-8 bg-gradient-to-r from-purple-600 to-purple-700 hover:from-purple-700 hover:to-purple-800 text-white rounded-xl shadow-lg hover:shadow-xl transition-all duration-300 transform hover:scale-105 active:scale-95 touch-manipulation min-w-[200px] font-semibold text-lg border-2 border-purple-500 ${
-                          !hasListenedToEnd ? 'opacity-50 cursor-not-allowed hover:scale-100' : ''
-                        }`}
-                      >
-                        <Edit2 className="h-5 w-5" />
-                        <span>Edited</span>
-                      </Button>
-                    ) : (
-                      <Button
-                        onClick={() => handleValidation(true)}
-                        size="default"
-                        disabled={!hasListenedToEnd}
-                        className={`flex items-center gap-2 h-auto py-3 px-8 bg-gradient-to-r from-green-600 to-green-700 hover:from-green-700 hover:to-green-800 text-white rounded-xl shadow-lg hover:shadow-xl transition-all duration-300 transform hover:scale-105 active:scale-95 touch-manipulation min-w-[200px] font-semibold text-lg border-2 border-green-500 ${
-                          !hasListenedToEnd ? 'opacity-50 cursor-not-allowed hover:scale-100' : ''
-                        }`}
-                      >
-                        <Check className="h-5 w-5" />
-                        <span>Pass</span>
-                      </Button>
-                    )}
-                  </div>
+                  {/* Yes/No Validation Section */}
+                  {hasListenedToEnd && (
+                    <div className="space-y-4 px-4 sm:px-0">
+                      {/* Yes/No Buttons */}
+                      <div className="flex justify-center gap-4">
+                        <Button
+                          onClick={() => {
+                            setValidationChoice('yes')
+                            // If they select Yes, allow editing
+                            if (!isEditingSentence) {
+                              setIsEditingSentence(true)
+                            }
+                          }}
+                          size="default"
+                          className={`flex items-center gap-2 h-auto py-3 px-8 rounded-xl shadow-lg hover:shadow-xl transition-all duration-300 transform hover:scale-105 active:scale-95 touch-manipulation min-w-[150px] font-semibold text-lg border-2 ${
+                            validationChoice === 'yes'
+                              ? 'bg-gradient-to-r from-green-600 to-green-700 hover:from-green-700 hover:to-green-800 text-white border-green-500'
+                              : 'bg-white hover:bg-green-50 text-gray-700 border-gray-300'
+                          }`}
+                        >
+                          <Check className="h-5 w-5" />
+                          <span>Yes</span>
+                        </Button>
+                        <Button
+                          onClick={() => {
+                            setValidationChoice('no')
+                            setIsEditingSentence(false) // Don't allow editing when No is selected
+                          }}
+                          size="default"
+                          className={`flex items-center gap-2 h-auto py-3 px-8 rounded-xl shadow-lg hover:shadow-xl transition-all duration-300 transform hover:scale-105 active:scale-95 touch-manipulation min-w-[150px] font-semibold text-lg border-2 ${
+                            validationChoice === 'no'
+                              ? 'bg-gradient-to-r from-red-600 to-red-700 hover:from-red-700 hover:to-red-800 text-white border-red-500'
+                              : 'bg-white hover:bg-red-50 text-gray-700 border-gray-300'
+                          }`}
+                        >
+                          <X className="h-5 w-5" />
+                          <span>No</span>
+                        </Button>
+                      </div>
+
+                      {/* Edit Field - Show when Yes is selected */}
+                      {validationChoice === 'yes' && (
+                        <div className="space-y-2">
+                          <label className="text-sm font-semibold text-gray-700 block">
+                            Correct the transcription if needed:
+                          </label>
+                          <Textarea
+                            value={editedSentence}
+                            onChange={(e) => setEditedSentence(e.target.value)}
+                            className="text-base font-semibold text-gray-900 leading-relaxed tracking-wide min-h-[80px] resize-none w-full border-2 border-gray-300 focus:border-green-500 focus:ring-2 focus:ring-green-200"
+                            style={{ fontFamily: 'Poppins, sans-serif' }}
+                            placeholder="Edit the sentence to match what was recorded..."
+                          />
+                        </div>
+                      )}
+
+                      {/* Reason Field - Show when No is selected */}
+                      {validationChoice === 'no' && (
+                        <div className="space-y-2">
+                          <label className="text-sm font-semibold text-gray-700 block">
+                            Please provide a reason for rejection: <span className="text-red-500">*</span>
+                          </label>
+                          <Textarea
+                            value={rejectionReason}
+                            onChange={(e) => setRejectionReason(e.target.value)}
+                            className="text-base font-semibold text-gray-900 leading-relaxed tracking-wide min-h-[80px] resize-none w-full border-2 border-gray-300 focus:border-red-500 focus:ring-2 focus:ring-red-200"
+                            style={{ fontFamily: 'Poppins, sans-serif' }}
+                            placeholder="Explain why the transcription is incorrect (e.g., wrong words, missing words, unclear audio, etc.)"
+                            required
+                          />
+                        </div>
+                      )}
+
+                      {/* Submit Button */}
+                      {validationChoice && (
+                        <div className="flex justify-center">
+                          <Button
+                            onClick={handleValidation}
+                            size="default"
+                            disabled={validationChoice === 'no' && !rejectionReason.trim()}
+                            className={`flex items-center gap-2 h-auto py-3 px-8 rounded-xl shadow-lg hover:shadow-xl transition-all duration-300 transform hover:scale-105 active:scale-95 touch-manipulation min-w-[200px] font-semibold text-lg border-2 ${
+                              validationChoice === 'yes'
+                                ? 'bg-gradient-to-r from-green-600 to-green-700 hover:from-green-700 hover:to-green-800 text-white border-green-500'
+                                : 'bg-gradient-to-r from-red-600 to-red-700 hover:from-red-700 hover:to-red-800 text-white border-red-500'
+                            } ${
+                              validationChoice === 'no' && !rejectionReason.trim() ? 'opacity-50 cursor-not-allowed hover:scale-100' : ''
+                            }`}
+                          >
+                            <Check className="h-5 w-5" />
+                            <span>Submit Review</span>
+                          </Button>
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
               </div>
               )}
