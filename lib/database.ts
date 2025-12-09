@@ -14,6 +14,19 @@ export type LanguageReview = {
   decision: "approved" | "rejected"
   notes: string | null
   transcript: string | null  // The validated/edited transcript
+  // Original recording metadata (preserved from source table)
+  original_transcript: string | null  // Original transcript before validation
+  audio_url: string | null  // Full URL to audio file
+  media_path_id: string | null  // Media path ID from recording
+  duration: number | null  // Audio duration in seconds
+  language: string | null  // Language of the recording
+  recorder_uuid: string | null  // UUID of person who recorded
+  user_id: string | null  // User ID (alternative to recorder_uuid)
+  recording_created_at: string | null  // When original recording was created
+  domain: string | null  // Domain/category of recording
+  prompt_type: string | null  // Type of prompt used
+  word_count: number | null  // Word count of transcript
+  ratio: number | null  // Some ratio metric
   confidence: number
   time_spent: number
   created_at: string
@@ -2040,14 +2053,15 @@ class SupabaseDatabase {
         throw new Error("Source table (language) is required")
       }
 
-      // Check if recording exists in the source language table
+      // Check if recording exists in the source language table and get all its data
       // New schema tables (somali, kalenjin, kikuyu, maasai) use _id, old schema (luo) uses id
       const isNewSchemaTable = ['somali', 'kalenjin', 'kikuyu', 'maasai'].includes(reviewData.source_table.toLowerCase())
       const idColumn = isNewSchemaTable ? '_id' : 'id'
       
+      // Fetch all recording data to preserve in the review
       const { data: recording, error: recordingError } = await supabase
         .from(reviewData.source_table)
-        .select(`${idColumn}, status`)
+        .select("*")
         .eq(idColumn, reviewData.recording_id)
         .single()
 
@@ -2055,6 +2069,29 @@ class SupabaseDatabase {
         console.error(`❌ Recording not found in ${reviewData.source_table} table:`, recordingError)
         throw new Error(`Recording not found in ${reviewData.source_table} table`)
       }
+      
+      // Extract recording metadata to store in review
+      const recordingMetadata = {
+        original_transcript: recording.cleaned_transcript || recording.actualSentence || recording.sentence || recording.translatedText || null,
+        audio_url: recording.audio_url || null,
+        media_path_id: recording.mediaPathId || null,
+        duration: recording.duration || null,
+        language: recording.language || null,
+        recorder_uuid: recording.recorder_uuid || null,
+        user_id: recording.user_id || null,
+        recording_created_at: recording.created_at || null,
+        domain: recording.domain || null,
+        prompt_type: recording.promptType || recording.prompt_type || null,
+        word_count: recording.word_count || null,
+        ratio: recording.ratio || null
+      }
+      
+      console.log(`📦 Extracted recording metadata:`, {
+        original_transcript: recordingMetadata.original_transcript?.substring(0, 50) + '...',
+        audio_url: recordingMetadata.audio_url?.substring(0, 50) + '...',
+        duration: recordingMetadata.duration,
+        language: recordingMetadata.language
+      })
 
       // Map source_table to the correct review table name
       const reviewTableMap: Record<string, string> = {
@@ -2117,6 +2154,19 @@ class SupabaseDatabase {
           decision: reviewData.decision,
           notes: reviewData.notes || null,
           transcript: reviewData.transcript || null,  // Store the validated/edited transcript
+          // Store all original recording metadata
+          original_transcript: recordingMetadata.original_transcript,
+          audio_url: recordingMetadata.audio_url,
+          media_path_id: recordingMetadata.media_path_id,
+          duration: recordingMetadata.duration,
+          language: recordingMetadata.language,
+          recorder_uuid: recordingMetadata.recorder_uuid,
+          user_id: recordingMetadata.user_id,
+          recording_created_at: recordingMetadata.recording_created_at,
+          domain: recordingMetadata.domain,
+          prompt_type: recordingMetadata.prompt_type,
+          word_count: recordingMetadata.word_count,
+          ratio: recordingMetadata.ratio,
           confidence: reviewData.confidence,
           time_spent: reviewData.time_spent,
           created_at: new Date().toISOString(),
