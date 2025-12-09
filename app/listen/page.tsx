@@ -8,7 +8,7 @@ import { Badge } from "@/components/ui/badge"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog"
 import { Textarea } from "@/components/ui/textarea"
 import { Play, Pause, ThumbsUp, SkipForward, HelpCircle, Volume2, ChevronLeft, ChevronRight, RotateCcw, List, Edit2, Check, X, Flag } from "lucide-react"
-import { db, type Recording, type LuoRecording } from "@/lib/database"
+import { db, type Recording, type LuoRecording, getLanguageTableName } from "@/lib/database"
 import { useToast } from "@/hooks/use-toast"
 import { supabase } from "@/lib/supabase"
 
@@ -50,21 +50,28 @@ export default function ListenPage() {
   const [editedSentence, setEditedSentence] = useState('')
   const [validationChoice, setValidationChoice] = useState<'yes' | 'no' | null>(null) // Yes/No validation
   const [rejectionReason, setRejectionReason] = useState('') // Reason when No is selected
+  const [userLanguageTable, setUserLanguageTable] = useState<string>('luo') // User's selected language table
   const audioRef = useRef<HTMLAudioElement | null>(null)
   const waveformRef = useRef<HTMLDivElement | null>(null)
   const audioObjectUrlRef = useRef<string | null>(null)
   const currentRecordingRef = useRef<Recording | null>(null) // Track current recording for real-time sync
 
+  // Load recordings when user or their language changes
   useEffect(() => {
-    loadPendingRecordings()
-  }, [])
+    // Only load if we have user info (wait for auth to complete)
+    if (user?.id) {
+      loadPendingRecordings()
+    }
+  }, [user?.id, user?.languages?.[0]]) // Reload when user ID or language changes
 
   // Keep ref in sync with currentRecording state
   useEffect(() => {
     currentRecordingRef.current = currentRecording
     // Reset editing state when recording changes
     setIsEditingSentence(false)
-    setEditedSentence(currentRecording?.sentence || '')
+    // Initialize editedSentence with current recording's sentence
+    // This ensures the field is always populated when "Yes" is selected
+    setEditedSentence(currentRecording?.sentence || currentRecording?.cleaned_transcript || '')
     setValidationChoice(null) // Reset validation choice
     setRejectionReason('') // Reset rejection reason
   }, [currentRecording])
@@ -75,19 +82,20 @@ export default function ListenPage() {
 
     console.log('🔔 Setting up real-time subscription for review events...')
     
-    // Subscribe to INSERT events on the reviews table
+    // Subscribe to INSERT events on the language_reviews table
     const channel = supabase
-      .channel('reviews-realtime')
+      .channel('language-reviews-realtime')
       .on(
         'postgres_changes',
         {
           event: 'INSERT',
           schema: 'public',
-          table: 'reviews',
+          table: 'language_reviews',
         },
         (payload) => {
           const newReview = payload.new as {
             id: string
+            source_table: string
             recording_id: string
             reviewer_id: string
             decision: string
@@ -257,21 +265,162 @@ export default function ListenPage() {
             console.log(`✅ Audio URL has extension: .${extension}`)
           }
           
-          // Try to verify file exists before setting src
+          // Try to verify file exists and get Content-Type (for .wav files, this helps diagnose issues)
+          // Note: Some storage providers don't support HEAD requests, so we try GET with range request
           try {
-            const headResponse = await fetch(url, { method: 'HEAD' })
-            if (headResponse.ok) {
-              const contentType = headResponse.headers.get('content-type')
-              console.log(`✅ File exists. Content-Type: ${contentType}`)
-              if (contentType && !contentType.startsWith('audio/')) {
-                console.warn(`⚠️ Unexpected content type: ${contentType}. Expected audio/*`)
+            // Try HEAD first, if that fails, try a small range GET request
+            let contentType: string | null = null
+            let fileExists = false
+            
+            try {
+              const headResponse = await fetch(url, { method: 'HEAD' })
+              if (headResponse.ok) {
+                contentType = headResponse.headers.get('content-type')
+                fileExists = true
+                console.log(`✅ File exists (HEAD). Content-Type: ${contentType || 'not set'}`)
+              } else if (headResponse.status === 400) {
+                // 400 is common for HEAD requests on Supabase - try range request instead
+                console.log("⚠️ HEAD returned 400, trying range request to verify file...")
+                try {
+                  const rangeResponse = await fetch(url, { 
+                    headers: { 'Range': 'bytes=0-1023' } // Request first 1KB
+                  })
+                  if (rangeResponse.ok || rangeResponse.status === 206) {
+                    contentType = rangeResponse.headers.get('content-type')
+                    fileExists = true
+                    console.log(`✅ File exists (range request). Content-Type: ${contentType || 'not set'}`)
+                  } else if (rangeResponse.status === 400) {
+                    // 400 on range request too - try fallback URL (file might be in bucket root, not subdirectory)
+                    console.warn(`⚠️ File not found at URL (both HEAD and range returned 400): ${url}`)
+                    
+                    // Try fallback URL if available (file might be in bucket root, not subdirectory)
+                    if (currentRecording && (currentRecording as any)._fallbackAudioUrl) {
+                      const fallbackUrl = (currentRecording as any)._fallbackAudioUrl
+                      console.log(`🔄 Trying fallback URL (without subdirectory): ${fallbackUrl}`)
+                      
+                      try {
+                        const fallbackResponse = await fetch(fallbackUrl, { 
+                          headers: { 'Range': 'bytes=0-1023' }
+                        })
+                        if (fallbackResponse.ok || fallbackResponse.status === 206) {
+                          console.log(`✅ Fallback URL works! Using: ${fallbackUrl}`)
+                          // Update the URL to use the fallback
+                          currentRecording.audio_url = fallbackUrl
+                          url = fallbackUrl
+                          contentType = fallbackResponse.headers.get('content-type')
+                          fileExists = true
+                        } else {
+                          console.error(`❌ Fallback URL also returned ${fallbackResponse.status}`)
+                          console.error(`   This recording may have an invalid audio_url. Recording ID: ${currentRecording.id}`)
+                          fileExists = false
+                        }
+                      } catch (fallbackError) {
+                        console.error(`❌ Fallback URL check failed. Recording ID: ${currentRecording.id}`)
+                        fileExists = false
+                      }
+                    } else {
+                      console.error(`❌ File does not exist at URL and no fallback available. Recording ID: ${currentRecording.id}`)
+                      fileExists = false
+                    }
+                  } else {
+                    console.warn(`⚠️ Range request returned status: ${rangeResponse.status}`)
+                  }
+                } catch (rangeError) {
+                  console.warn("⚠️ Range request failed:", rangeError)
+                }
+              } else {
+                console.warn(`⚠️ File check returned status: ${headResponse.status}`)
               }
-            } else {
-              console.warn(`⚠️ File check returned status: ${headResponse.status}`)
+            } catch (headError) {
+              // HEAD failed, try range request
+              try {
+                const rangeResponse = await fetch(url, { 
+                  headers: { 'Range': 'bytes=0-1023' }
+                })
+                if (rangeResponse.ok || rangeResponse.status === 206) {
+                  contentType = rangeResponse.headers.get('content-type')
+                  fileExists = true
+                  console.log(`✅ File exists (range request). Content-Type: ${contentType || 'not set'}`)
+                } else if (rangeResponse.status === 400) {
+                  console.warn(`⚠️ File not found at URL (400): ${url}`)
+                  // Try fallback URL if available (file might be in bucket root, not subdirectory)
+                  if (currentRecording && (currentRecording as any)._fallbackAudioUrl) {
+                    const fallbackUrl = (currentRecording as any)._fallbackAudioUrl
+                    console.log(`🔄 Trying fallback URL (without subdirectory): ${fallbackUrl}`)
+                    
+                    try {
+                      const fallbackResponse = await fetch(fallbackUrl, { 
+                        headers: { 'Range': 'bytes=0-1023' }
+                      })
+                      if (fallbackResponse.ok || fallbackResponse.status === 206) {
+                        console.log(`✅ Fallback URL works! Using: ${fallbackUrl}`)
+                        // Update the URL to use the fallback
+                        currentRecording.audio_url = fallbackUrl
+                        url = fallbackUrl
+                        contentType = fallbackResponse.headers.get('content-type')
+                        fileExists = true
+                      } else {
+                        console.error(`❌ Fallback URL also returned ${fallbackResponse.status}`)
+                        fileExists = false
+                      }
+                    } catch (fallbackError) {
+                      console.warn("⚠️ Fallback URL check failed:", fallbackError)
+                      fileExists = false
+                    }
+                  } else {
+                    console.error(`❌ File does not exist at URL. Recording ID: ${currentRecording.id}`)
+                    fileExists = false
+                  }
+                }
+              } catch (rangeError) {
+                // HEAD failed, try range request
+                try {
+                  const rangeResponse = await fetch(url, { 
+                    headers: { 'Range': 'bytes=0-1023' }
+                  })
+                  if (rangeResponse.ok || rangeResponse.status === 206) {
+                    contentType = rangeResponse.headers.get('content-type')
+                    fileExists = true
+                    console.log(`✅ File exists (range request). Content-Type: ${contentType || 'not set'}`)
+                  } else if (rangeResponse.status === 400) {
+                    // Try fallback URL if available
+                    if (currentRecording && (currentRecording as any)._fallbackAudioUrl) {
+                      const fallbackUrl = (currentRecording as any)._fallbackAudioUrl
+                      console.log(`🔄 Trying fallback URL (without subdirectory): ${fallbackUrl}`)
+                      
+                      try {
+                        const fallbackResponse = await fetch(fallbackUrl, { 
+                          headers: { 'Range': 'bytes=0-1023' }
+                        })
+                        if (fallbackResponse.ok || fallbackResponse.status === 206) {
+                          console.log(`✅ Fallback URL works! Using: ${fallbackUrl}`)
+                          currentRecording.audio_url = fallbackUrl
+                          url = fallbackUrl
+                          contentType = fallbackResponse.headers.get('content-type')
+                          fileExists = true
+                        } else {
+                          console.warn(`⚠️ Fallback URL returned ${fallbackResponse.status}`)
+                        }
+                      } catch (fallbackError) {
+                        console.warn("⚠️ Fallback URL check failed")
+                      }
+                    }
+                  }
+                } catch (rangeError2) {
+                  // Both failed, continue anyway - might work for playback
+                  console.log("⚠️ Could not verify file (HEAD and range both failed), continuing anyway")
+                }
+              }
+            }
+            
+            // Warn if Content-Type is wrong for .wav files
+            if (fileExists && contentType) {
+              if (url.toLowerCase().endsWith('.wav') && !contentType.includes('wav') && !contentType.includes('audio')) {
+                console.warn(`⚠️ WAV file has unexpected Content-Type: ${contentType}. This might cause playback issues.`)
+              }
             }
           } catch (fetchError) {
-            console.warn("⚠️ Could not verify file existence (CORS or network issue):", fetchError)
-            // Continue anyway - might work for playback even if HEAD fails
+            // Silently continue - verification is optional
           }
           
           audio.src = currentRecording.audio_url
@@ -300,6 +449,8 @@ export default function ListenPage() {
             const handleError = (e: Event) => {
               const target = e.target as HTMLAudioElement
               const error = target.error
+              const audioUrl = target.src
+              const isWavFile = audioUrl.toLowerCase().endsWith('.wav')
               
               // Map error codes to user-friendly messages
               let errorMessage = "Unknown error"
@@ -312,23 +463,39 @@ export default function ListenPage() {
                     errorMessage = "Network error or corrupted audio data"
                     break
                   case 3: // MEDIA_ERR_DECODE
-                    errorMessage = "Audio file is corrupted or in unsupported format"
+                    errorMessage = isWavFile 
+                      ? "WAV file is corrupted or invalid. Please check the file in Supabase storage."
+                      : "Audio file is corrupted or in unsupported format"
                     break
                   case 4: // MEDIA_ERR_SRC_NOT_SUPPORTED
-                    errorMessage = "Audio format not supported by browser"
+                    errorMessage = isWavFile
+                      ? "WAV file cannot be played. The file may be corrupted, have wrong Content-Type header, or the file doesn't exist at the URL."
+                      : "Audio format not supported by browser"
                     break
                 }
               }
               
-              const audioUrl = audio.src
               console.error("❌ Audio loading error:", {
                 code: error?.code,
                 message: error?.message,
                 userMessage: errorMessage,
                 src: audioUrl,
                 recordingId: currentRecording.id,
-                fullUrl: audioUrl
+                fullUrl: audioUrl,
+                isWavFile: isWavFile,
+                readyState: target.readyState,
+                networkState: target.networkState
               })
+              
+              // For WAV files, provide additional debugging info
+              if (isWavFile && error?.code === 4) {
+                console.error("🔍 WAV file troubleshooting:")
+                console.error("  - URL:", audioUrl)
+                console.error("  - Check if file exists in Supabase storage bucket")
+                console.error("  - Verify file is a valid WAV file (not corrupted)")
+                console.error("  - Check Content-Type header is 'audio/wav' or 'audio/x-wav'")
+                console.error("  - Verify file path includes correct bucket name and subdirectories")
+              }
               
               // If error is format-related and URL doesn't have extension, try different extensions
               if (error?.code === 4 && currentRecording && (currentRecording as any)._originalFilename) {
@@ -532,13 +699,25 @@ export default function ListenPage() {
       setLoading(true)
       backgroundLoadRef.current = false // Reset background load flag
       
+      // DEBUG: Log user object to see what languages are available
+      console.log('👤 User object:', {
+        id: user?.id,
+        email: user?.email,
+        languages: user?.languages,
+        role: user?.role
+      })
+      
       // Get validator's language from their profile (get it once at the start)
       let validatorLanguage: string | undefined = undefined
       if (user?.languages && user.languages.length > 0) {
         validatorLanguage = user.languages[0]
-        console.log(`🌍 Filtering luo recordings by validator's language: "${validatorLanguage}"`)
+        // Set the language table based on user's selected language
+        const languageTable = getLanguageTableName(validatorLanguage)
+        setUserLanguageTable(languageTable)
+        console.log(`🌍 Filtering recordings by validator's language: "${validatorLanguage}" -> table: "${languageTable}"`)
       } else {
-        console.warn('⚠️ Validator has no language selected in profile. Showing all languages from luo table.')
+        console.warn('⚠️ Validator has no language selected in profile. user.languages =', user?.languages)
+        setUserLanguageTable('luo') // Default to luo
       }
       
       // INSTANT LOADING: Fetch only first 10 recordings with limit at database level
@@ -974,57 +1153,50 @@ export default function ListenPage() {
       return
     }
 
+    // If Yes is selected, ensure editedSentence is set (reviewer must review/edit the transcript)
+    if (validationChoice === 'yes') {
+      if (!editedSentence.trim()) {
+        toast({
+          title: "Transcription Review Required",
+          description: "Please review and confirm the transcription. Edit if needed, or keep as-is if correct.",
+          variant: "destructive",
+        })
+        return
+      }
+    }
+
     try {
       const timeSpent = Math.floor((Date.now() - reviewStartTime) / 1000)
 
       if (validationChoice === 'yes') {
-        // YES: Check if sentence was edited
-      const sentenceWasEdited = editedSentence.trim() !== currentRecording.sentence.trim()
-      
-        // Update recording with new transcription validation fields if edited
-      if (sentenceWasEdited && editedSentence.trim()) {
-        try {
-            await db.updateLuoRecording(currentRecording.id, {
-            original_sentence: currentRecording.sentence, // Preserve original
-            sentence: editedSentence.trim(),               // Update with corrected version
-            transcription_edited: true,                    // Mark as edited
-            edited_by: user.id,                           // Track who edited
-            edited_at: new Date().toISOString(),          // Track when edited
-              status: "approved", // Set status to approved
-          })
-          console.log('✅ Recording transcription updated and tracked:', editedSentence.trim())
-        } catch (updateError) {
-          console.error('Error updating recording transcription:', updateError)
-          // Continue with review even if sentence update fails
-        }
+        // YES: Reviewer must review/edit the transcript
+        // editedSentence should always be set (either edited or same as original)
+        const sentenceWasEdited = editedSentence.trim() !== currentRecording.sentence.trim()
+        
+        // Create review notes - preserve original and edited transcription info
+        let reviewNotes = "Transcription verified as correct"
+        if (sentenceWasEdited && editedSentence.trim()) {
+          reviewNotes = `Transcription corrected from: "${currentRecording.sentence}" to: "${editedSentence.trim()}"`
         } else {
-          // If no edit, just approve the recording
-          try {
-            await db.updateLuoRecording(currentRecording.id, {
-              status: "approved",
-              reviewed_by: user.id,
-              reviewed_at: new Date().toISOString(),
-            })
-          } catch (updateError) {
-            console.error('Error updating recording status:', updateError)
-          }
+          // Even if not edited, record that it was reviewed and confirmed
+          reviewNotes = `Transcription reviewed and confirmed as correct: "${editedSentence.trim()}"`
         }
 
-        // Create review notes
-      let reviewNotes = "Transcription verified as correct"
-      if (sentenceWasEdited && editedSentence.trim()) {
-        reviewNotes = `Transcription corrected from: "${currentRecording.sentence}" to: "${editedSentence.trim()}"`
-      }
-
-        // Create review (approved) - use createLuoReview for luo table recordings
-        await db.createLuoReview({
-        recording_id: currentRecording.id,
-        reviewer_id: user.id,
-        decision: "approved",
-        notes: reviewNotes,
-        confidence: Math.floor(Math.random() * 20) + 80, // 80-100% confidence
-        time_spent: timeSpent,
-      })
+        // Create review - this will also delete the recording from the language table
+        // Use createLanguageReview with user's language table
+        // Store the validated/edited transcript in the review
+        console.log(`📝 Submitting review for recording ${currentRecording.id} to table: ${userLanguageTable}`)
+        await db.createLanguageReview({
+          recording_id: currentRecording.id,
+          reviewer_id: user.id,
+          source_table: userLanguageTable, // Use user's selected language table
+          decision: "approved",
+          notes: reviewNotes,
+          transcript: editedSentence.trim(), // Store the validated/edited transcript
+          confidence: Math.floor(Math.random() * 20) + 80, // 80-100% confidence
+          time_spent: timeSpent,
+        })
+        console.log(`✅ Review submitted successfully for ${userLanguageTable}`)
 
       toast({
           title: sentenceWasEdited ? "Transcription Corrected" : "Transcription Verified",
@@ -1034,25 +1206,20 @@ export default function ListenPage() {
         })
       } else {
         // NO: Rejected with reason
-        await db.createLuoReview({
+        // Create review - this will also delete the recording from the language table
+        // Store the original transcript even for rejected reviews
+        console.log(`📝 Submitting rejection for recording ${currentRecording.id} to table: ${userLanguageTable}`)
+        await db.createLanguageReview({
           recording_id: currentRecording.id,
           reviewer_id: user.id,
+          source_table: userLanguageTable, // Use user's selected language table
           decision: "rejected", // Use rejected decision
-          notes: `Rejected: ${rejectionReason.trim()}`,
+          notes: `Rejected: ${rejectionReason.trim()}. Original transcription: "${currentRecording.sentence}"`,
+          transcript: currentRecording.sentence || currentRecording.cleaned_transcript || '', // Store original transcript
           confidence: 0, // Low confidence for rejected
           time_spent: timeSpent,
         })
-
-        // Update recording status to rejected
-        try {
-            await db.updateLuoRecording(currentRecording.id, {
-              status: "rejected" as any, // Set to rejected (luo table supports rejected status)
-            reviewed_by: user.id,
-            reviewed_at: new Date().toISOString(),
-          })
-        } catch (updateError) {
-          console.error('Error updating recording status:', updateError)
-        }
+        console.log(`✅ Rejection submitted successfully for ${userLanguageTable}`)
 
         toast({
           title: "Recording Rejected",
@@ -1641,8 +1808,7 @@ export default function ListenPage() {
                                 height: `${Math.sin(i * 0.15) * 12 + 20}px`,
                                 backgroundColor: `rgba(59, 130, 246, ${0.3 + Math.random() * 0.3})`,
                                 minWidth: '2px',
-                                animation: isPlaying ? `wave-animation ${0.5 + Math.random() * 0.5}s ease-in-out infinite` : 'none',
-                                animationDelay: `${i * 0.02}s`,
+                                animation: isPlaying ? `wave-animation ${0.5 + Math.random() * 0.5}s ease-in-out ${i * 0.02}s infinite` : 'none',
                               }}
                             />
                           ))
@@ -1801,7 +1967,8 @@ export default function ListenPage() {
                               <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2">
                                 <label className="text-sm sm:text-base font-bold text-gray-800 flex items-center gap-2">
                                   <Check className="h-3 w-3 sm:h-4 sm:w-4 text-green-600" />
-                                  <span>Correct the transcription if needed:</span>
+                                  <span>Review and edit the transcription:</span>
+                                  <span className="text-green-500 text-base sm:text-lg">*</span>
                                 </label>
                                 {editedSentence.trim() !== currentRecording?.sentence.trim() && (
                                   <Badge variant="outline" className="bg-green-50 text-green-700 border-green-300 text-xs">
@@ -1812,12 +1979,13 @@ export default function ListenPage() {
                               <Textarea
                                 value={editedSentence}
                                 onChange={(e) => setEditedSentence(e.target.value)}
-                                className="text-sm sm:text-base font-semibold text-gray-900 leading-relaxed tracking-wide min-h-[80px] sm:min-h-[100px] max-h-[200px] resize-y w-full border-2 border-gray-300 focus:border-green-500 focus:ring-2 focus:ring-green-200 rounded-lg p-2 sm:p-3"
+                                className="text-sm sm:text-base font-semibold text-gray-900 leading-relaxed tracking-wide min-h-[80px] sm:min-h-[100px] max-h-[200px] resize-y w-full border-2 border-green-300 focus:border-green-500 focus:ring-2 focus:ring-green-200 rounded-lg p-2 sm:p-3"
                                 style={{ fontFamily: 'Poppins, sans-serif' }}
-                                placeholder="Edit the sentence to match what was recorded..."
+                                placeholder="Review the transcription below. Edit if needed, or keep as-is if correct..."
+                                required
                               />
-                              <p className="text-xs text-gray-500 italic">
-                                💡 Tip: Leave as-is if the transcription is correct, or edit to fix any errors.
+                              <p className="text-xs text-gray-600 italic">
+                                ⚠️ Required: You must review the transcription. Edit to correct any errors, or keep as-is if it's already correct.
                               </p>
                             </div>
                           )}
@@ -1849,13 +2017,17 @@ export default function ListenPage() {
                             <Button
                               onClick={handleValidation}
                               size="default"
-                              disabled={validationChoice === 'no' && !rejectionReason.trim()}
+                              disabled={
+                                (validationChoice === 'no' && !rejectionReason.trim()) ||
+                                (validationChoice === 'yes' && !editedSentence.trim())
+                              }
                               className={`flex items-center gap-2 h-auto py-3 sm:py-4 px-6 sm:px-10 rounded-xl shadow-lg hover:shadow-xl transition-all duration-300 transform hover:scale-105 active:scale-95 touch-manipulation w-full sm:w-auto sm:min-w-[220px] font-bold text-base sm:text-lg border-2 ${
                                 validationChoice === 'yes'
                                   ? 'bg-gradient-to-r from-green-600 to-green-700 hover:from-green-700 hover:to-green-800 text-white border-green-500 shadow-green-500/50'
                                   : 'bg-gradient-to-r from-red-600 to-red-700 hover:from-red-700 hover:to-red-800 text-white border-red-500 shadow-red-500/50'
                               } ${
-                                validationChoice === 'no' && !rejectionReason.trim() 
+                                ((validationChoice === 'no' && !rejectionReason.trim()) ||
+                                 (validationChoice === 'yes' && !editedSentence.trim()))
                                   ? 'opacity-50 cursor-not-allowed hover:scale-100' 
                                   : ''
                         }`}

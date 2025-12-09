@@ -4,7 +4,37 @@ import { withCache, queryCache } from "./cache"
 
 export type User = Database["public"]["Tables"]["users"]["Row"]
 export type Recording = Database["public"]["Tables"]["recordings"]["Row"]
-export type Review = Database["public"]["Tables"]["reviews"]["Row"]
+
+// NEW: Language Review type for the language_reviews table
+export type LanguageReview = {
+  id: string
+  source_table: string  // 'luo', 'somali', 'maasai', 'kalenjin', 'kikuyu'
+  recording_id: string
+  reviewer_id: string
+  decision: "approved" | "rejected"
+  notes: string | null
+  transcript: string | null  // The validated/edited transcript
+  confidence: number
+  time_spent: number
+  created_at: string
+}
+
+// Keep Review as alias for backwards compatibility
+export type Review = LanguageReview
+
+// Language table mapping - maps user's selected language to database table name
+export const LANGUAGE_TABLE_MAP: Record<string, string> = {
+  "Somali": "somali",
+  "Luo": "luo",
+  "Maasai": "maasai",
+  "Kalenjin": "kalenjin",
+  "Kikuyu": "kikuyu",
+}
+
+// Helper to get table name from language
+export function getLanguageTableName(language: string): string {
+  return LANGUAGE_TABLE_MAP[language] || language.toLowerCase()
+}
 
 // Luo table type - compatible with Recording type for use in listen page
 // Maps luo table columns (which may use 'transcription' instead of 'sentence') to Recording format
@@ -631,24 +661,101 @@ class SupabaseDatabase {
         return []
       }
 
-      let query = supabase
-        .from("recordings")
-        .select("*")
-        .eq("user_id", userId)
-        .order("created_at", { ascending: false })
-
-      if (options?.limit) {
-        query = query.limit(options.limit)
+      // Get user's selected language to determine which table to query
+      let userLanguage: string | null = null
+      let languageTable: string | null = null
+      
+      try {
+        const user = await this.getUserById(userId)
+        if (user && user.languages && user.languages.length > 0) {
+          userLanguage = user.languages[0]
+          languageTable = getLanguageTableName(userLanguage)
+          console.log(`🌍 User ${userId} has language "${userLanguage}" -> querying table "${languageTable}"`)
+        }
+      } catch (userError) {
+        console.warn("Could not fetch user language, will query generic recordings table:", userError)
       }
 
-      const { data, error } = await query
+      let allRecordings: any[] = []
 
-      if (error) {
-        console.error("Database error getting recordings by user:", error)
-        throw new Error(`Failed to get recordings by user: ${error.message}`)
+      // First, try to get recordings from the language-specific table if user has a language
+      if (languageTable && languageTable !== "recordings") {
+        try {
+          let query = supabase
+            .from(languageTable)
+            .select("*")
+            .eq("user_id", userId)
+            .order("created_at", { ascending: false })
+
+          if (options?.limit) {
+            query = query.limit(options.limit)
+          }
+
+          const { data, error } = await query
+
+          if (error) {
+            // If table doesn't exist, log warning but continue to generic table
+            if (error.message.includes("does not exist")) {
+              console.warn(`⚠️ Language table "${languageTable}" does not exist, falling back to recordings table`)
+            } else {
+              console.error(`Database error getting recordings from ${languageTable}:`, error)
+            }
+          } else {
+            // Map language-specific recordings to Recording format
+            const mappedRecordings = await this.mapLuoRecordings(data || [], languageTable)
+            allRecordings = [...allRecordings, ...mappedRecordings]
+            console.log(`✅ Found ${mappedRecordings.length} recordings in ${languageTable} table`)
+          }
+        } catch (langError: any) {
+          console.warn(`Could not fetch from ${languageTable} table:`, langError.message)
+        }
       }
 
-      return data || []
+      // Also check the generic recordings table (as fallback or for users without language)
+      try {
+        let query = supabase
+          .from("recordings")
+          .select("*")
+          .eq("user_id", userId)
+          .order("created_at", { ascending: false })
+
+        if (options?.limit) {
+          query = query.limit(options.limit)
+        }
+
+        const { data, error } = await query
+
+        if (error) {
+          console.error("Database error getting recordings by user:", error)
+          // If we already have recordings from language table, don't throw
+          if (allRecordings.length === 0) {
+            throw new Error(`Failed to get recordings by user: ${error.message}`)
+          }
+        } else {
+          allRecordings = [...allRecordings, ...(data || [])]
+          console.log(`✅ Found ${data?.length || 0} recordings in recordings table`)
+        }
+      } catch (genericError: any) {
+        // If we have recordings from language table, that's okay
+        if (allRecordings.length === 0) {
+          console.error("Error in getRecordingsByUser:", genericError)
+        }
+      }
+
+      // Remove duplicates and sort by created_at
+      const uniqueRecordings = Array.from(
+        new Map(allRecordings.map(rec => [rec.id, rec])).values()
+      ).sort((a, b) => {
+        const dateA = new Date(a.created_at || 0).getTime()
+        const dateB = new Date(b.created_at || 0).getTime()
+        return dateB - dateA
+      })
+
+      if (options?.limit && uniqueRecordings.length > options.limit) {
+        return uniqueRecordings.slice(0, options.limit)
+      }
+
+      return uniqueRecordings
     } catch (error) {
       console.error("Error in getRecordingsByUser:", error)
       return []
@@ -733,61 +840,164 @@ class SupabaseDatabase {
     return await this.getRecordingsByStatusExcludingUserLegacy(status, userId, options)
   }
 
-  // Helper: Map luo table records to LuoRecording format
-  // luo table columns: id, status, language, sentence, actualSentence, translatedText, audio_url, user_id, duration, etc.
-  private async mapLuoRecordings(data: any[]): Promise<LuoRecording[]> {
-    // Fetch user dialects for all unique user_ids in batch
-    const userIds = [...new Set(data.map(rec => rec.user_id).filter(Boolean))]
+  // Helper: Map language table records to LuoRecording format
+  // Handles different schemas:
+  // - luo table: id, status, language, sentence, actualSentence, translatedText, audio_url, user_id, duration, created_at
+  // - Other language tables (kalenjin, somali, kikuyu, maasai): _id, mediaPathId, recorder_uuid, actualSentence, translatedText, cleaned_transcript, duration, language
+  private async mapLuoRecordings(data: any[], tableName?: string): Promise<LuoRecording[]> {
+    if (!data || data.length === 0) {
+      return []
+    }
+
+    // Determine if this is a "new schema" table (kalenjin, somali, etc.) or "old schema" (luo)
+    // New schema tables use _id instead of id, mediaPathId instead of audio_url, recorder_uuid instead of user_id
+    const isNewSchema = data[0] && ('_id' in data[0] || 'mediaPathId' in data[0])
+    
+    // Determine table name - use provided tableName, or infer from data, or default to 'luo'
+    let detectedTableName = tableName
+    if (!detectedTableName) {
+      // Try to infer from language field in data
+      if (data[0]?.language) {
+        const language = data[0].language.toLowerCase()
+        // Map common language names to table names
+        const languageToTable: Record<string, string> = {
+          'somali': 'somali',
+          'kalenjin': 'kalenjin',
+          'kikuyu': 'kikuyu',
+          'maasai': 'maasai',
+          'luo': 'luo'
+        }
+        detectedTableName = languageToTable[language] || (isNewSchema ? 'unknown' : 'luo')
+      } else {
+        detectedTableName = isNewSchema ? 'unknown' : 'luo'
+      }
+    }
+    
+    // Determine storage bucket name based on table name
+    // Each language has its own bucket with the same name as the table (normalized to lowercase)
+    const bucketName = detectedTableName.toLowerCase()
+    
+    // Log bucket name for debugging
+    if (data.length > 0) {
+      console.log(`📦 Using bucket "${bucketName}" for table "${detectedTableName}" (${data.length} recordings)`)
+    }
+    
+    // Fetch user dialects for all unique user_ids/recorder_uuids in batch
+    const userIds = [...new Set(data.map(rec => {
+      // Handle both schemas: user_id (luo) or recorder_uuid (other tables)
+      return rec.user_id || rec.recorder_uuid || null
+    }).filter(Boolean))]
+    
     const userDialects: Record<string, string> = {}
     
-    if (userIds.length > 0) {
-      try {
-        const { data: users, error } = await supabase
-          .from("users")
-          .select("id, accent_dialect, language_dialect")
-          .in("id", userIds)
+        if (userIds.length > 0) {
+          try {
+            // Batch queries to avoid URL length limits (smaller batches for safety)
+            // Reduced to 25 to prevent 400 errors with long IDs
+            const BATCH_SIZE = 25
+        const batches: string[][] = []
         
-        if (!error && users) {
-          users.forEach(user => {
-            // Prefer accent_dialect, fallback to language_dialect
-            const dialect = user.accent_dialect || user.language_dialect
-            if (dialect) {
-              userDialects[user.id] = dialect
+        for (let i = 0; i < userIds.length; i += BATCH_SIZE) {
+          batches.push(userIds.slice(i, i + BATCH_SIZE))
+        }
+        
+        // Fetch batches sequentially to avoid overwhelming the server and better error handling
+        for (const batch of batches) {
+          try {
+            const { data: users, error } = await supabase
+              .from("users")
+              .select("id, accent_dialect, language_dialect")
+              .in("id", batch)
+            
+            if (error) {
+              // Silently skip batches with errors (invalid IDs, etc.)
+              // This is non-critical data, so we continue without dialects
+              continue
             }
-          })
+            
+            if (users) {
+              users.forEach(user => {
+                // Prefer accent_dialect, fallback to language_dialect
+                const dialect = user.accent_dialect || user.language_dialect
+                if (dialect) {
+                  userDialects[user.id] = dialect
+                }
+              })
+            }
+          } catch (batchError) {
+            // Silently continue to next batch
+            continue
+          }
         }
       } catch (error) {
-        console.warn("⚠️ Could not fetch user dialects:", error)
+        // Silently fail - dialects are optional metadata
       }
     }
     
     const mapped = data.map((rec: any) => {
+      // Map _id to id for new schema tables
+      const id = rec.id || rec._id || ''
+      
+      // Map user_id - handle both schemas
+      const userId = rec.user_id || rec.recorder_uuid || ''
+      
+      // Map to sentence field - ALWAYS prioritize cleaned_transcript for validators
+      // cleaned_transcript is the cleaned/processed version that should be shown to validators
+      const sentence = rec.cleaned_transcript?.trim() || rec.actualSentence?.trim() || rec.sentence?.trim() || rec.translatedText?.trim() || rec.audio_transcript?.trim() || ''
+      
+      // Log if cleaned_transcript is missing (for debugging)
+      if (!rec.cleaned_transcript && (rec.actualSentence || rec.sentence || rec.translatedText || rec.audio_transcript)) {
+        console.warn(`⚠️ Recording ${id} missing cleaned_transcript, using fallback: ${rec.actualSentence ? 'actualSentence' : rec.sentence ? 'sentence' : rec.translatedText ? 'translatedText' : 'audio_transcript'}`)
+      }
+      
+      // Handle status - new schema tables don't have status, default to 'pending'
+      const status = rec.status || 'pending'
+      
+      // Handle duration
+      const duration = rec.duration || 0
+      
+      // Handle created_at - new schema tables don't have this, use current time or null
+      const createdAt = rec.created_at || rec.createdAt || new Date().toISOString()
+      
       const mapped: any = {
         ...rec,
-        // Map to sentence field - prioritize cleaned_transcript first, then fallback to others
-        sentence: rec.cleaned_transcript || rec.actualSentence || rec.sentence || rec.translatedText || rec.audio_transcript || '', 
-        // Ensure we have the required fields for Recording type
-        user_id: rec.user_id || '', // luo table has user_id as text
-        duration: rec.duration || 0,
-        status: rec.status || 'pending', // Default to pending if null
-        // Get dialect from luo table if available, otherwise from user
-        dialect: rec.dialect || rec.accent_dialect || rec.language_dialect || userDialects[rec.user_id] || null,
+        id, // Ensure id is always present
+        sentence,
+        user_id: userId,
+        duration,
+        status,
+        created_at: createdAt,
+        updated_at: rec.updated_at || createdAt,
+        // Get dialect from table if available, otherwise from user
+        dialect: rec.dialect || rec.accent_dialect || rec.language_dialect || userDialects[userId] || null,
       }
-      // Handle audio_url - luo table has audio_url and mediaPathId columns
-      // Prefer audio_url, fallback to mediaPathId
+      
+      // Handle audio_url - different column names in different schemas
+      // Old schema (luo): audio_url
+      // New schema (kalenjin, somali, etc.): mediaPathId
       let audioPath = rec.audio_url || rec.mediaPathId || ''
       
       if (audioPath) {
         // If it's already a full URL, use it as-is
         if (audioPath.startsWith('http://') || audioPath.startsWith('https://') || audioPath.startsWith('data:')) {
           mapped.audio_url = audioPath
-          console.log(`🔊 Using existing full URL: ${audioPath.substring(0, 100)}...`)
         } else {
-          // It's a filename - construct full URL to luo bucket
+          // It's a filename - construct full URL to appropriate bucket
           const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
           if (supabaseUrl) {
             // Clean filename (remove trailing underscores/spaces)
             let filename = audioPath.trim().replace(/[_\s]+$/, '')
+            
+            // Check if filename is already URL encoded (contains %)
+            // If it is, decode it first, then we'll encode it properly
+            if (filename.includes('%')) {
+              try {
+                filename = decodeURIComponent(filename)
+              } catch (e) {
+                // If decoding fails, use as-is
+                console.warn(`⚠️ Could not decode filename, using as-is: ${filename}`)
+              }
+            }
             
             // Check if filename already has an extension
             const hasExtension = filename.match(/\.(wav|mp3|ogg|webm|m4a|flac|aac|opus)$/i)
@@ -795,29 +1005,42 @@ class SupabaseDatabase {
             if (!hasExtension) {
               // No extension found - store original for potential retry with different extensions
               mapped._originalFilename = filename
-              // Try .wav first (most common for this project based on user's mention)
+              // Try .wav first (most common for this project)
               filename = `${filename}.wav`
-              console.log(`🔊 No extension found, adding .wav: ${filename}`)
               // Store alternative extensions to try if .wav fails
               mapped._alternativeExtensions = ['.mp3', '.ogg', '.webm', '.m4a']
-            } else {
-              console.log(`🔊 Filename has extension: ${filename}`)
             }
             
-            mapped.audio_url = `${supabaseUrl}/storage/v1/object/public/luo/${encodeURIComponent(filename)}`
-            console.log(`🔊 Constructed audio URL: ${mapped.audio_url}`)
+            // Properly encode the filename for URL (handles special characters like /, spaces, etc.)
+            // Split by / to handle paths, encode each segment, then join
+            const pathParts = filename.split('/').map(part => encodeURIComponent(part))
+            const encodedFilename = pathParts.join('/')
+            
+            // Use the appropriate bucket name for the language table
+            // Each language has its own bucket: somali → somali bucket, kalenjin → kalenjin bucket, etc.
+            mapped.audio_url = `${supabaseUrl}/storage/v1/object/public/${bucketName}/${encodedFilename}`
+            
+            // Store fallback URL without subdirectory prefix (in case file is in bucket root, not in subdirectory)
+            // Some files might be at: somali/filename.wav instead of somali/PROMPT_COLLECTION/filename.wav
+            if (filename.includes('/')) {
+              // Extract just the filename (last part after /)
+              const filenameOnly = filename.split('/').pop() || filename
+              const encodedFilenameOnly = encodeURIComponent(filenameOnly)
+              mapped._fallbackAudioUrl = `${supabaseUrl}/storage/v1/object/public/${bucketName}/${encodedFilenameOnly}`
+            }
           } else {
             mapped.audio_url = audioPath
             console.warn(`⚠️ No Supabase URL configured, using raw path: ${audioPath}`)
           }
         }
       } else {
-        console.warn(`⚠️ No audio_url or mediaPathId found for recording ${rec.id}`)
+        console.warn(`⚠️ No audio_url or mediaPathId found for recording ${id}`)
       }
+      
       return mapped as LuoRecording
     })
     
-    console.log(`📦 Mapped ${mapped.length} luo recordings. Sample:`, mapped[0] ? {
+    console.log(`📦 Mapped ${mapped.length} recordings from ${detectedTableName} table. Schema: ${isNewSchema ? 'new' : 'old'}. Sample:`, mapped[0] ? {
       id: mapped[0].id,
       sentence: mapped[0].sentence?.substring(0, 50),
       audio_url: mapped[0].audio_url?.substring(0, 100),
@@ -912,115 +1135,131 @@ class SupabaseDatabase {
     }
   }
 
-  // NEW: Get recordings from luo table by status (for direct CSV imports)
-  async getLuoRecordingsByStatus(
+  // Generic: Get recordings from ANY language table by status
+  // The table is determined by the language parameter
+  async getLanguageRecordingsByStatus(
     status: "pending" | "approved", 
     options?: { limit?: number; language?: string }
   ): Promise<LuoRecording[]> {
     try {
-      console.log(`🔍 Querying luo table: status="${status}", language="${options?.language || 'all'}", limit=${options?.limit || 'none'}`)
-      
-      // First, inspect the table structure to understand what we're working with
-      const structure = await this.inspectLuoTableStructure()
-      console.log(`📋 Luo table structure:`, {
-        hasStatus: structure.hasStatusColumn,
-        statusValues: structure.statusValues.slice(0, 5),
-        hasLanguage: structure.hasLanguageColumn,
-        hasSentence: structure.hasSentenceColumn,
-        hasTranscription: structure.hasTranslatedTextColumn,
-        hasAudioUrl: structure.hasAudioUrlColumn,
-        sampleColumns: structure.sampleRow ? Object.keys(structure.sampleRow) : []
-      })
+      // Determine the table based on language (defaults to 'luo')
+      const tableName = options?.language ? getLanguageTableName(options.language) : "luo"
+      console.log(`🔍 Querying ${tableName} table: status="${status}", language="${options?.language || 'all'}", limit=${options?.limit || 'none'}`)
       
       // If limit is specified, use it directly (for performance when only need a few records)
       if (options?.limit) {
+        // First, try to query with status filter (for tables that have status column like luo)
         let query = supabase
-          .from("luo")
+          .from(tableName)
           .select("*")
         
-        // Simple direct query - luo table has status column with default 'pending'
-        query = query.eq("status", "pending")
-        console.log(`✅ Querying luo table for status='pending'`)
+        // Try to filter by status first (some tables have it, some don't)
+        query = query.eq("status", status)
+        console.log(`✅ Querying ${tableName} table for status='${status}'`)
         
-        // Filter by language at database level if specified
-        if (options?.language) {
-          query = query.ilike("language", `%${options.language}%`)
-          console.log(`🌍 Filtering by language: "${options.language}"`)
-        }
+        // Try to order by created_at (some tables have it, some don't)
+        let orderColumn = "created_at"
+        query = query.order(orderColumn, { ascending: false })
         
-        const { data, error } = await query
-          .order("created_at", { ascending: false })
-          .limit(options.limit)
+        const { data, error } = await query.limit(options.limit)
 
         if (error) {
-          console.error("❌ Database error:", error)
-          // Try without filters to check if table is accessible
-          const { data: testData, error: testError } = await supabase
-            .from("luo")
-            .select("id, status, language")
-            .limit(5)
+          // Check if error is due to missing status or created_at column
+          const errorMessage = error.message || error.toString() || JSON.stringify(error)
+          const errorCode = error.code || ''
           
-          if (testError) {
-            console.error("❌ Table access error:", testError)
-            console.error("⚠️ This is likely an RLS (Row Level Security) issue!")
-            console.error("💡 Check Supabase dashboard > Authentication > Policies for 'luo' table")
-          } else {
-            console.log(`📋 Test query successful. Found ${testData?.length || 0} rows`)
-            if (testData && testData.length > 0) {
-              console.log(`📋 Status values found:`, [...new Set(testData.map(r => r.status))])
-            }
-          }
-          throw new Error(`Failed to get luo recordings: ${error.message}`)
-        }
+          // Check for missing column error (PostgreSQL error code 42703 = undefined column)
+          const isColumnError = (
+            errorCode === '42703' || 
+            (errorMessage.includes("column") && (errorMessage.includes("status") || errorMessage.includes("created_at")))
+          )
 
-        console.log(`✅ Found ${data?.length || 0} luo recordings`)
-        
-        // If no results, debug by checking what's actually in the table
-        if (!data || data.length === 0) {
-          console.warn(`⚠️ No results. Checking table contents...`)
-          const { data: allData, error: allError } = await supabase
-            .from("luo")
-            .select("id, status, language")
-            .limit(10)
-          
-          if (!allError && allData) {
-            console.log(`📋 Total rows accessible: ${allData.length}`)
-            if (allData.length > 0) {
-              const statuses = [...new Set(allData.map(r => r.status))]
-              console.log(`📋 Status values in table:`, statuses)
-              console.log(`📋 Sample row:`, allData[0])
+          if (isColumnError) {
+            console.warn(`⚠️ Table "${tableName}" doesn't have status or created_at column, fetching all recordings without filters`)
+            
+            // Retry without status filter and without created_at ordering
+            let retryQuery = supabase
+              .from(tableName)
+              .select("*")
+            
+            // Try ordering by _id for new schema tables, or id for old schema
+            const isNewSchemaTable = ['kalenjin', 'somali', 'kikuyu', 'maasai'].includes(tableName.toLowerCase())
+            if (isNewSchemaTable) {
+              // New schema tables use _id
+              retryQuery = retryQuery.order("_id", { ascending: false })
             } else {
-              console.warn(`⚠️ Table is accessible but has 0 rows, or RLS is blocking all rows`)
+              // Old schema tables (luo) use id
+              retryQuery = retryQuery.order("id", { ascending: false })
             }
+            
+            const { data: retryData, error: retryError } = await retryQuery.limit(options.limit)
+
+            if (retryError) {
+              // If ordering also fails, try without any ordering
+              const { data: finalData, error: finalError } = await supabase
+                .from(tableName)
+                .select("*")
+                .limit(options.limit)
+
+              if (finalError) {
+                console.error(`❌ Database error querying ${tableName} (final retry):`, finalError)
+                const finalErrorMessage = finalError.message || finalError.toString() || ''
+                if (finalErrorMessage.includes("does not exist")) {
+                  console.error(`❌ CRITICAL: Table "${tableName}" does not exist in database!`)
+                  console.error(`   User selected language: "${options?.language}"`)
+                  console.error(`   Mapped to table: "${tableName}"`)
+                  console.error(`   This table needs to be created in Supabase for this language to work.`)
+                  console.error(`   Available tables: luo, somali, maasai, kalenjin, kikuyu`)
+                  return []
+                }
+                throw new Error(`Failed to get ${tableName} recordings: ${finalErrorMessage}`)
+              }
+
+              console.log(`✅ Found ${finalData?.length || 0} recordings from ${tableName} (no filters, no ordering)`)
+              return await this.mapLuoRecordings(finalData || [], tableName)
+            }
+
+            console.log(`✅ Found ${retryData?.length || 0} recordings from ${tableName} (no status filter)`)
+            return await this.mapLuoRecordings(retryData || [], tableName)
           }
+
+          console.error(`❌ Database error querying ${tableName}:`, error)
+          // If table doesn't exist, return empty array with detailed error message
+          if (errorMessage.includes("does not exist") || errorCode === '42P01') {
+            console.error(`❌ CRITICAL: Table "${tableName}" does not exist in database!`)
+            console.error(`   User selected language: "${options?.language}"`)
+            console.error(`   Mapped to table: "${tableName}"`)
+            console.error(`   This table needs to be created in Supabase for this language to work.`)
+            console.error(`   Available tables: luo, somali, maasai, kalenjin, kikuyu`)
+            return []
+          }
+          throw new Error(`Failed to get ${tableName} recordings: ${errorMessage}`)
         }
 
-        return await this.mapLuoRecordings(data || [])
+        console.log(`✅ Found ${data?.length || 0} recordings from ${tableName}`)
+        if (data && data.length === 0) {
+          console.warn(`⚠️ Table "${tableName}" exists but has no recordings with status="${status}"`)
+        }
+        return await this.mapLuoRecordings(data || [], tableName)
       }
 
       // Use pagination to fetch ALL recordings by status
-      console.log(`🔄 Fetching all ${status} luo recordings with pagination...`)
-      
-      // Reuse structure info from earlier inspection (or inspect again if not available)
-      const structureForPagination = structure || await this.inspectLuoTableStructure()
+      console.log(`🔄 Fetching all ${status} recordings from ${tableName} with pagination...`)
       
       let allRecordings: LuoRecording[] = []
       let page = 0
       const pageSize = 1000
       let hasMore = true
+      let tableHasStatusColumn = true // Assume it has status column initially
 
       while (hasMore) {
         let query = supabase
-          .from("luo")
+          .from(tableName)
           .select("*")
         
-        // Handle status filtering - simple direct query
-        query = query.eq("status", status === "pending" ? "pending" : status)
-        
-        // Filter by language at database level if specified
-        // Use case-insensitive matching
-        if (options?.language) {
-          query = query.ilike("language", `%${options.language}%`)
+        // Handle status filtering (if table has status column)
+        if (tableHasStatusColumn) {
+          query = query.eq("status", status)
         }
         
         const { data: recordingsBatch, error: batchError } = await query
@@ -1028,15 +1267,67 @@ class SupabaseDatabase {
           .range(page * pageSize, (page + 1) * pageSize - 1)
 
         if (batchError) {
-          console.error("Database error getting luo recordings by status batch:", batchError)
-          throw new Error(`Failed to get luo recordings by status: ${batchError.message}`)
+          // Check if error is due to missing status column
+          const batchErrorMessage = batchError.message || batchError.toString() || JSON.stringify(batchError)
+          const batchErrorCode = batchError.code || ''
+          
+          // Check for missing status column error (PostgreSQL error code 42703 = undefined column)
+          const isStatusColumnError = (
+            (batchErrorCode === '42703' || (batchErrorMessage.includes("column") && batchErrorMessage.includes("status"))) &&
+            tableHasStatusColumn
+          )
+
+          if (isStatusColumnError) {
+            console.warn(`⚠️ Table "${tableName}" doesn't have status column, fetching all recordings without status filter`)
+            tableHasStatusColumn = false
+            
+            // Retry without status filter
+            const retryQuery = supabase
+              .from(tableName)
+              .select("*")
+              .order("created_at", { ascending: false })
+              .range(page * pageSize, (page + 1) * pageSize - 1)
+
+            const { data: retryBatch, error: retryError } = await retryQuery
+
+            if (retryError) {
+              console.error(`Database error getting ${tableName} recordings batch (retry):`, retryError)
+              const retryErrorMessage = retryError.message || retryError.toString() || ''
+              if (retryErrorMessage.includes("does not exist")) {
+                console.warn(`⚠️ Table "${tableName}" does not exist`)
+                return []
+              }
+              throw new Error(`Failed to get ${tableName} recordings: ${retryErrorMessage}`)
+            }
+
+            if (!retryBatch || retryBatch.length === 0) {
+              hasMore = false
+            } else {
+              const mappedBatch = await this.mapLuoRecordings(retryBatch, tableName)
+              allRecordings = [...allRecordings, ...mappedBatch]
+              hasMore = retryBatch.length === pageSize
+              page++
+            }
+            continue
+          }
+
+          console.error(`Database error getting ${tableName} recordings batch:`, batchError)
+          // batchErrorMessage already declared above, reuse it
+          if (batchErrorMessage.includes("does not exist") || batchError.code === '42P01') {
+            console.error(`❌ CRITICAL: Table "${tableName}" does not exist in database!`)
+            console.error(`   User selected language: "${options?.language || 'unknown'}"`)
+            console.error(`   Mapped to table: "${tableName}"`)
+            console.error(`   This table needs to be created in Supabase for this language to work.`)
+            return []
+          }
+          throw new Error(`Failed to get ${tableName} recordings: ${batchErrorMessage}`)
         }
 
         if (!recordingsBatch || recordingsBatch.length === 0) {
           hasMore = false
         } else {
-          // Map luo table columns to Recording format
-          const mappedBatch = await this.mapLuoRecordings(recordingsBatch)
+          // Map table columns to Recording format
+          const mappedBatch = await this.mapLuoRecordings(recordingsBatch, tableName)
           allRecordings = [...allRecordings, ...mappedBatch]
           hasMore = recordingsBatch.length === pageSize
           page++
@@ -1045,43 +1336,59 @@ class SupabaseDatabase {
 
       return allRecordings
     } catch (error) {
-      console.error("Error in getLuoRecordingsByStatus:", error)
+      console.error("Error in getLanguageRecordingsByStatus:", error)
       return []
     }
   }
 
-  // NEW: Get luo recordings excluding those already reviewed by the reviewer
-  // Filters by validator's selected language
-  async getLuoRecordingsExcludingReviewedByUser(
+  // Backwards compatibility: Get recordings from luo table by status
+  async getLuoRecordingsByStatus(
+    status: "pending" | "approved", 
+    options?: { limit?: number; language?: string }
+  ): Promise<LuoRecording[]> {
+    // If language is provided, use the new generic function
+    if (options?.language) {
+      return this.getLanguageRecordingsByStatus(status, options)
+    }
+    // Otherwise, default to luo table
+    return this.getLanguageRecordingsByStatus(status, { ...options, language: "Luo" })
+  }
+
+  // Get recordings from a language table excluding those already reviewed by the reviewer
+  // Uses reviewer's selected language to determine which table to query
+  async getLanguageRecordingsExcludingReviewedByUser(
     status: "pending" | "approved", 
     reviewerId: string,
     options?: { limit?: number; language?: string }
   ): Promise<LuoRecording[]> {
     try {
-      if (!reviewerId || !isValidUUID(reviewerId)) {
-        return await this.getLuoRecordingsByStatus(status, options)
-      }
-
-      // Get reviewer's language from their profile
-      let reviewerLanguage: string | null = null
-      if (options?.language) {
-        reviewerLanguage = options.language
-      } else {
+      // Get reviewer's language from options or profile
+      let reviewerLanguage: string | null = options?.language || null
+      
+      if (!reviewerLanguage && reviewerId && isValidUUID(reviewerId)) {
         try {
           const reviewer = await this.getUserById(reviewerId)
           if (reviewer && reviewer.languages && reviewer.languages.length > 0) {
             reviewerLanguage = reviewer.languages[0]
           }
         } catch (userError) {
-          console.warn("Could not fetch reviewer language, will show all languages:", userError)
+          console.warn("Could not fetch reviewer language, will use default (luo):", userError)
         }
       }
 
-      // First, get recordings the reviewer has already reviewed
-      // Note: reviews table references recordings.id, so we need to check if luo.id matches
-      let reviews: Review[] = []
+      // If no reviewer ID, just return recordings by status from the language table
+      if (!reviewerId || !isValidUUID(reviewerId)) {
+        return await this.getLanguageRecordingsByStatus(status, { ...options, language: reviewerLanguage || "Luo" })
+      }
+
+      // Determine the source table based on language
+      const sourceTable = reviewerLanguage ? getLanguageTableName(reviewerLanguage) : "luo"
+      console.log(`🌍 Reviewer language: "${reviewerLanguage}" -> table: "${sourceTable}"`)
+
+      // Get recordings the reviewer has already reviewed from language_reviews table
+      let reviews: LanguageReview[] = []
       try {
-        reviews = await this.getReviewsByReviewer(reviewerId)
+        reviews = await this.getReviewsByReviewer(reviewerId, { sourceTable })
       } catch (reviewError) {
         console.error("🚨 CRITICAL: Failed to fetch reviewer's reviews. Cannot prevent duplicate reviews!", reviewError)
         throw new Error("Failed to load reviewer data. Please try again. This prevents duplicate reviews.")
@@ -1089,33 +1396,161 @@ class SupabaseDatabase {
       
       const reviewedRecordingIds = new Set(reviews.map(r => r.recording_id))
 
-      // Fetch pending recordings from luo table
+      // Fetch pending recordings from the language table
       const fetchOptions = { ...options, language: reviewerLanguage || undefined }
-      let allRecordings = await this.getLuoRecordingsByStatus(status, fetchOptions)
-
-      // If language filtering returns no results, try without language filter (fallback)
-      if (reviewerLanguage && allRecordings.length === 0) {
-        console.warn(`⚠️ No recordings found with language "${reviewerLanguage}", falling back to all languages`)
-        const fallbackOptions = { ...options, language: undefined }
-        allRecordings = await this.getLuoRecordingsByStatus(status, fallbackOptions)
-      }
-
-      // Language filtering is done at database level, but log for debugging
-      if (reviewerLanguage) {
-        console.log(`🌍 Filtered luo recordings by language "${reviewerLanguage}" at database level: ${allRecordings.length} recordings match`)
-      }
+      let allRecordings = await this.getRecordingsFromLanguageTable(sourceTable, status, fetchOptions)
 
       // Filter out recordings the reviewer has already reviewed
       const availableRecordings = allRecordings.filter(
         recording => !reviewedRecordingIds.has(recording.id)
       )
 
-      console.log(`📊 Reviewer ${reviewerId} (${reviewerLanguage || 'all languages'}): ${allRecordings.length} pending luo recordings, ${reviewedRecordingIds.size} already reviewed, ${availableRecordings.length} available`)
+      console.log(`📊 Reviewer ${reviewerId} (${sourceTable}): ${allRecordings.length} pending recordings, ${reviewedRecordingIds.size} already reviewed, ${availableRecordings.length} available`)
       
       return availableRecordings
     } catch (error) {
-      console.error("Error in getLuoRecordingsExcludingReviewedByUser:", error)
+      console.error("Error in getLanguageRecordingsExcludingReviewedByUser:", error)
       throw error
+    }
+  }
+
+  // Backwards compatibility alias
+  async getLuoRecordingsExcludingReviewedByUser(
+    status: "pending" | "approved", 
+    reviewerId: string,
+    options?: { limit?: number; language?: string }
+  ): Promise<LuoRecording[]> {
+    return this.getLanguageRecordingsExcludingReviewedByUser(status, reviewerId, options)
+  }
+
+  // NEW: Get recordings from any language table
+  async getRecordingsFromLanguageTable(
+    tableName: string,
+    status: "pending" | "approved",
+    options?: { limit?: number; language?: string }
+  ): Promise<LuoRecording[]> {
+    try {
+      // Check if this is a new schema table that doesn't have status/created_at columns
+      // New schema tables: kalenjin, somali, kikuyu, maasai
+      // Old schema tables: luo (has status and created_at)
+      const isNewSchemaTable = ['kalenjin', 'somali', 'kikuyu', 'maasai'].includes(tableName.toLowerCase())
+      
+      // If limit is specified, fetch only that many records
+      if (options?.limit) {
+        let query = supabase
+          .from(tableName)
+          .select("*")
+
+        // Only filter by status if table has this column (old schema tables)
+        if (status && !isNewSchemaTable) {
+          query = query.eq("status", status)
+        }
+
+        // Only order by created_at if table has this column (old schema tables)
+        if (!isNewSchemaTable) {
+          query = query.order("created_at", { ascending: false })
+        } else {
+          // New schema tables use _id for ordering
+          query = query.order("_id", { ascending: false })
+        }
+
+        query = query.limit(options.limit)
+
+        const { data, error } = await query
+
+        if (error) {
+          const errorMessage = error.message || error.toString() || JSON.stringify(error)
+          const errorCode = error.code || ''
+          
+          // If table doesn't exist, return empty array
+          if (errorMessage.includes("does not exist") || errorCode === '42P01') {
+            console.warn(`⚠️ Table "${tableName}" does not exist`)
+            return []
+          }
+          throw new Error(`Failed to get recordings from ${tableName}: ${errorMessage}`)
+        }
+
+        // Map the recordings and filter by status in memory for new schema tables
+        const mapped = await this.mapLuoRecordings(data || [], tableName)
+        
+        // For new schema tables, all records are returned (status is always 'pending' in mapping)
+        // For old schema tables, the query already filtered by status
+        if (isNewSchemaTable && status) {
+          // Filter in memory if needed (though new schema tables default to 'pending')
+          const filtered = mapped.filter(r => r.status === status)
+          return filtered
+        }
+
+        return mapped
+      }
+
+      // FIXED: Use pagination to fetch ALL recordings when no limit specified (not limited to 1000 rows)
+      console.log(`🔄 Fetching all recordings from ${tableName} with pagination...`)
+      let allRecordings: any[] = []
+      let page = 0
+      const pageSize = 1000
+      let hasMore = true
+
+      while (hasMore) {
+        let query = supabase
+          .from(tableName)
+          .select("*")
+
+        // Only filter by status if table has this column (old schema tables)
+        if (status && !isNewSchemaTable) {
+          query = query.eq("status", status)
+        }
+
+        // Only order by created_at if table has this column (old schema tables)
+        if (!isNewSchemaTable) {
+          query = query.order("created_at", { ascending: false })
+        } else {
+          // New schema tables use _id for ordering
+          query = query.order("_id", { ascending: false })
+        }
+
+        const { data: recordingsBatch, error: batchError } = await query
+          .range(page * pageSize, (page + 1) * pageSize - 1)
+
+        if (batchError) {
+          const errorMessage = batchError.message || batchError.toString() || JSON.stringify(batchError)
+          const errorCode = batchError.code || ''
+          
+          // If table doesn't exist, return empty array
+          if (errorMessage.includes("does not exist") || errorCode === '42P01') {
+            console.warn(`⚠️ Table "${tableName}" does not exist`)
+            return []
+          }
+          throw new Error(`Failed to get recordings from ${tableName}: ${errorMessage}`)
+        }
+
+        if (!recordingsBatch || recordingsBatch.length === 0) {
+          hasMore = false
+          break
+        }
+
+        allRecordings = [...allRecordings, ...recordingsBatch]
+        hasMore = recordingsBatch.length === pageSize
+        page++
+      }
+
+      console.log(`✅ Fetched ${allRecordings.length} total recordings from ${tableName}`)
+
+      // Map all recordings
+      const mapped = await this.mapLuoRecordings(allRecordings, tableName)
+      
+      // For new schema tables, all records are returned (status is always 'pending' in mapping)
+      // For old schema tables, the query already filtered by status
+      if (isNewSchemaTable && status) {
+        // Filter in memory if needed (though new schema tables default to 'pending')
+        const filtered = mapped.filter(r => r.status === status)
+        return filtered
+      }
+
+      return mapped
+    } catch (error) {
+      console.error(`Error in getRecordingsFromLanguageTable (${tableName}):`, error)
+      return []
     }
   }
 
@@ -1425,7 +1860,7 @@ class SupabaseDatabase {
 
       // Map the result to LuoRecording format
       if (data) {
-        const mapped = await this.mapLuoRecordings([data])
+        const mapped = await this.mapLuoRecordings([data], "luo")
         return mapped[0] || null
       }
 
@@ -1580,15 +2015,18 @@ class SupabaseDatabase {
     }
   }
 
-  // NEW: Create review for luo table recordings
-  async createLuoReview(reviewData: {
+  // NEW: Create review for any language table recordings
+  // Stores in the unified language_reviews table with source_table tracking
+  async createLanguageReview(reviewData: {
     recording_id: string
     reviewer_id: string
+    source_table: string  // 'luo', 'somali', 'maasai', 'kalenjin', 'kikuyu'
     decision: "approved" | "rejected"
     notes?: string | null
+    transcript?: string | null  // The validated/edited transcript
     confidence: number
     time_spent: number
-  }): Promise<any> {
+  }): Promise<LanguageReview> {
     try {
       if (!reviewData.recording_id || !reviewData.recording_id.trim()) {
         throw new Error("Invalid recording ID provided for review")
@@ -1598,68 +2036,173 @@ class SupabaseDatabase {
         throw new Error("Invalid reviewer ID provided for review")
       }
 
-      // Check if recording exists in luo table
+      if (!reviewData.source_table) {
+        throw new Error("Source table (language) is required")
+      }
+
+      // Check if recording exists in the source language table
+      // New schema tables (somali, kalenjin, kikuyu, maasai) use _id, old schema (luo) uses id
+      const isNewSchemaTable = ['somali', 'kalenjin', 'kikuyu', 'maasai'].includes(reviewData.source_table.toLowerCase())
+      const idColumn = isNewSchemaTable ? '_id' : 'id'
+      
       const { data: recording, error: recordingError } = await supabase
-        .from("luo")
-        .select("id, status")
-        .eq("id", reviewData.recording_id)
+        .from(reviewData.source_table)
+        .select(`${idColumn}, status`)
+        .eq(idColumn, reviewData.recording_id)
         .single()
 
       if (recordingError || !recording) {
-        console.error("❌ Recording not found in luo table:", recordingError)
-        throw new Error("Recording not found in luo table")
+        console.error(`❌ Recording not found in ${reviewData.source_table} table:`, recordingError)
+        throw new Error(`Recording not found in ${reviewData.source_table} table`)
       }
 
-      // Check for existing reviews
-      const { count: existingReviewCount, error: countError } = await supabase
-        .from("luo_reviews")
+      // Map source_table to the correct review table name
+      const reviewTableMap: Record<string, string> = {
+        'luo': 'luo_reviews',
+        'somali': 'somali_reviews',
+        'kalenjin': 'kalenjin_reviews',
+        'kikuyu': 'kikuyu_reviews',
+        'maasai': 'maasai_reviews'
+      }
+      
+      const normalizedSourceTable = reviewData.source_table.toLowerCase().trim()
+      const reviewTableName = reviewTableMap[normalizedSourceTable]
+      
+      console.log(`📝 Creating review: source_table="${reviewData.source_table}" (normalized: "${normalizedSourceTable}") → reviewTable="${reviewTableName}"`)
+      
+      if (!reviewTableName) {
+        console.error(`❌ Invalid source_table: "${reviewData.source_table}". Supported: luo, somali, kalenjin, kikuyu, maasai`)
+        throw new Error(`Invalid source_table: ${reviewData.source_table}. Supported tables: luo, somali, kalenjin, kikuyu, maasai`)
+      }
+
+      // Check for existing reviews in the appropriate review table
+      console.log(`🔍 Checking for existing reviews in ${reviewTableName} for recording ${reviewData.recording_id}...`)
+      const { count, error: countError } = await supabase
+        .from(reviewTableName)
         .select("*", { count: "exact", head: true })
         .eq("recording_id", reviewData.recording_id)
         .eq("reviewer_id", reviewData.reviewer_id)
 
       if (countError) {
-        console.error("Error checking existing luo reviews:", countError)
+        console.error(`❌ Error checking existing reviews in ${reviewTableName}:`, countError)
+        // Check if table doesn't exist
+        if (countError.message.includes("does not exist") || countError.message.includes("schema cache")) {
+          throw new Error(`Review table ${reviewTableName} does not exist. Please run script 034_create_language_review_tables.sql to create it.`)
+        }
         throw new Error(`Failed to check for existing reviews: ${countError.message}`)
       }
+      
+      console.log(`✅ Found ${count || 0} existing reviews in ${reviewTableName}`)
 
-      if (existingReviewCount && existingReviewCount > 0) {
+      if (count && count > 0) {
         throw new Error("This recording has already been reviewed by you. Each recording can only be reviewed once per reviewer.")
       }
 
-      // Insert review into luo_reviews table
-      const { data, error } = await supabase
-        .from("luo_reviews")
+      // Insert review into the appropriate review table
+      console.log(`💾 Inserting review into ${reviewTableName}...`, {
+        recording_id: reviewData.recording_id,
+        reviewer_id: reviewData.reviewer_id,
+        decision: reviewData.decision,
+        notes: reviewData.notes?.substring(0, 50) + '...',
+        transcript: reviewData.transcript?.substring(0, 50) + '...',
+        confidence: reviewData.confidence,
+        time_spent: reviewData.time_spent
+      })
+      
+      const result = await supabase
+        .from(reviewTableName)
         .insert({
           recording_id: reviewData.recording_id,
           reviewer_id: reviewData.reviewer_id,
           decision: reviewData.decision,
           notes: reviewData.notes || null,
+          transcript: reviewData.transcript || null,  // Store the validated/edited transcript
           confidence: reviewData.confidence,
           time_spent: reviewData.time_spent,
           created_at: new Date().toISOString(),
         })
         .select()
         .single()
-
+      
+      const data = result.data
+      const error = result.error
+      
       if (error) {
-        console.error("Database error creating luo review:", error)
+        console.error(`❌ Database error inserting into ${reviewTableName}:`, error)
+        console.error(`   Error details:`, {
+          code: error.code,
+          message: error.message,
+          details: error.details,
+          hint: error.hint
+        })
+        
+        // Check if table doesn't exist
+        if (error.message.includes("does not exist") || error.message.includes("schema cache")) {
+          throw new Error(`Review table ${reviewTableName} does not exist. Please run script 034_create_language_review_tables.sql to create it.`)
+        }
+        
         // Check if error is due to duplicate (unique constraint violation)
-        if (error.code === "23505" || error.message.includes("duplicate") || error.message.includes("unique") || error.message.includes("unique_luo_reviewer_recording")) {
+        if (error.code === "23505" || error.message.includes("duplicate") || error.message.includes("unique")) {
           throw new Error("This recording has already been reviewed by you. Each recording can only be reviewed once per reviewer.")
         }
-        throw new Error(`Failed to create review: ${error.message}`)
+        
+        // Throw the error immediately - don't continue
+        throw new Error(`Failed to create review in ${reviewTableName}: ${error.message}`)
       }
-
-      if (!data) {
+      
+      // Map result to LanguageReview format (add source_table for compatibility)
+      let mappedData = data
+      if (data) {
+        mappedData = { ...data, source_table: reviewData.source_table }
+        console.log(`✅ Review inserted successfully into ${reviewTableName}. Review ID: ${mappedData.id}`)
+      } else {
+        console.error(`❌ No data returned from insert into ${reviewTableName}`)
         throw new Error("No data returned from review creation")
       }
 
-      console.log("✅ Luo review created successfully:", data.id)
-      return data
+      console.log(`✅ Review created successfully in ${reviewTableName} for ${reviewData.source_table}:`, mappedData.id)
+      
+      // After successful review creation, delete the recording from the source language table
+      // This ensures only pending recordings remain in the language tables
+      // Use correct column name based on table schema (idColumn was set earlier)
+      try {
+        const { error: deleteError } = await supabase
+          .from(reviewData.source_table)
+          .delete()
+          .eq(idColumn, reviewData.recording_id)
+        
+        if (deleteError) {
+          console.error(`⚠️ Failed to delete recording from ${reviewData.source_table} table after review:`, deleteError)
+          // Don't throw error - review was created successfully, deletion is cleanup
+          // Log warning but continue
+        } else {
+          console.log(`✅ Recording ${reviewData.recording_id} deleted from ${reviewData.source_table} table after validation`)
+        }
+      } catch (deleteException) {
+        console.error(`⚠️ Exception while deleting recording from ${reviewData.source_table} table:`, deleteException)
+        // Don't throw - review was successful, deletion is cleanup
+      }
+      
+      return mappedData as LanguageReview
     } catch (error) {
-      console.error("Error in createLuoReview:", error)
+      console.error("Error in createLanguageReview:", error)
       throw error
     }
+  }
+
+  // Backwards compatibility: Create review for luo table (calls createLanguageReview)
+  async createLuoReview(reviewData: {
+    recording_id: string
+    reviewer_id: string
+    decision: "approved" | "rejected"
+    notes?: string | null
+    confidence: number
+    time_spent: number
+  }): Promise<LanguageReview> {
+    return this.createLanguageReview({
+      ...reviewData,
+      source_table: "luo"
+    })
   }
 
   // NEW: Get all luo recordings (for admin/reviewer dashboards)
@@ -1678,7 +2221,7 @@ class SupabaseDatabase {
           throw new Error(`Failed to get luo recordings: ${error.message}`)
         }
 
-        return await this.mapLuoRecordings(data || [])
+        return await this.mapLuoRecordings(data || [], "luo")
       }
 
       // Use pagination to fetch ALL luo recordings
@@ -1703,7 +2246,7 @@ class SupabaseDatabase {
         if (!batch || batch.length === 0) {
           hasMore = false
         } else {
-          const mappedBatch = await this.mapLuoRecordings(batch)
+          const mappedBatch = await this.mapLuoRecordings(batch, "luo")
           allRecordings = [...allRecordings, ...mappedBatch]
           hasMore = batch.length === pageSize
           page++
@@ -1831,60 +2374,164 @@ class SupabaseDatabase {
     }
   }
 
-  async getReviewsByReviewer(reviewerId: string, options?: { limit?: number }): Promise<Review[]> {
+  // Get reviews by reviewer from individual review tables
+  // Optionally filter by source_table (language) - uses the appropriate review table
+  async getReviewsByReviewer(reviewerId: string, options?: { limit?: number; sourceTable?: string }): Promise<LanguageReview[]> {
     try {
       if (!reviewerId || !isValidUUID(reviewerId)) {
         return []
       }
 
-      // If limit is specified, use it directly (for performance when only need a few records)
-      if (options?.limit) {
-        const { data, error } = await supabase
-          .from("reviews")
-          .select("*")
-          .eq("reviewer_id", reviewerId)
-          .order("created_at", { ascending: false })
-          .limit(options.limit)
-
-        if (error) {
-          console.error("Database error getting reviews by reviewer:", error)
-          throw new Error(`Failed to get reviews by reviewer: ${error.message}`)
-        }
-
-        return data || []
+      // Map source_table to the correct review table name
+      const reviewTableMap: Record<string, string> = {
+        'luo': 'luo_reviews',
+        'somali': 'somali_reviews',
+        'kalenjin': 'kalenjin_reviews',
+        'kikuyu': 'kikuyu_reviews',
+        'maasai': 'maasai_reviews'
       }
-
-      // FIXED: Use pagination to fetch ALL reviews by reviewer (not limited to 1000 rows)
-      console.log(`🔄 Fetching all reviews for reviewer ${reviewerId} with pagination...`)
-      let allReviews: Review[] = []
-      let page = 0
-      const pageSize = 1000
-      let hasMore = true
-
-      while (hasMore) {
-        const { data: reviewsBatch, error: batchError } = await supabase
-          .from("reviews")
-          .select("*")
-          .eq("reviewer_id", reviewerId)
-          .order("created_at", { ascending: false })
-          .range(page * pageSize, (page + 1) * pageSize - 1)
-
-        if (batchError) {
-          console.error("Database error getting reviews by reviewer batch:", batchError)
-          throw new Error(`Failed to get reviews by reviewer: ${batchError.message}`)
+      
+      // If sourceTable is specified, use that specific review table
+      // Otherwise, we need to query all review tables and combine results
+      if (options?.sourceTable) {
+        const tableName = reviewTableMap[options.sourceTable.toLowerCase()]
+        if (!tableName) {
+          console.warn(`⚠️ Unknown sourceTable: ${options.sourceTable}, returning empty array`)
+          return []
         }
+        
+        // Query the specific review table
+        if (options?.limit) {
+          const { data, error } = await supabase
+            .from(tableName)
+            .select("*")
+            .eq("reviewer_id", reviewerId)
+            .order("created_at", { ascending: false })
+            .limit(options.limit)
 
-        if (!reviewsBatch || reviewsBatch.length === 0) {
-          hasMore = false
+          if (error) {
+            console.error(`Database error getting reviews from ${tableName}:`, error)
+            throw new Error(`Failed to get reviews by reviewer: ${error.message}`)
+          }
+
+          // Map to LanguageReview format (add source_table)
+          return (data || []).map((review: any) => ({
+            ...review,
+            source_table: options.sourceTable!
+          })) as LanguageReview[]
         } else {
-          allReviews = [...allReviews, ...reviewsBatch]
-          hasMore = reviewsBatch.length === pageSize
-          page++
-        }
-      }
+          // Pagination for all reviews from this table
+          let allReviews: LanguageReview[] = []
+          let page = 0
+          const pageSize = 1000
+          let hasMore = true
 
-      console.log(`✅ Fetched ${allReviews.length} total reviews for reviewer ${reviewerId}`)
-      return allReviews
+          while (hasMore) {
+            const { data: reviewsBatch, error: batchError } = await supabase
+              .from(tableName)
+              .select("*")
+              .eq("reviewer_id", reviewerId)
+              .order("created_at", { ascending: false })
+              .range(page * pageSize, (page + 1) * pageSize - 1)
+
+            if (batchError) {
+              console.error(`Database error getting reviews from ${tableName} batch:`, batchError)
+              throw new Error(`Failed to get reviews by reviewer: ${batchError.message}`)
+            }
+
+            if (!reviewsBatch || reviewsBatch.length === 0) {
+              hasMore = false
+              break
+            }
+
+            // Map to LanguageReview format
+            const mappedBatch = reviewsBatch.map((review: any) => ({
+              ...review,
+              source_table: options.sourceTable!
+            })) as LanguageReview[]
+            
+            allReviews = [...allReviews, ...mappedBatch]
+            hasMore = reviewsBatch.length === pageSize
+            page++
+          }
+
+          return allReviews
+        }
+      } else {
+        // No sourceTable specified - query all review tables and combine
+        const allReviewTables = Object.entries(reviewTableMap)
+        let allReviews: LanguageReview[] = []
+
+        for (const [sourceTable, tableName] of allReviewTables) {
+          try {
+            if (options?.limit) {
+              const { data, error } = await supabase
+                .from(tableName)
+                .select("*")
+                .eq("reviewer_id", reviewerId)
+                .order("created_at", { ascending: false })
+                .limit(options.limit)
+
+              if (!error && data) {
+                const mapped = data.map((review: any) => ({
+                  ...review,
+                  source_table: sourceTable
+                })) as LanguageReview[]
+                allReviews = [...allReviews, ...mapped]
+              }
+            } else {
+              // Pagination for all reviews from this table
+              let page = 0
+              const pageSize = 1000
+              let hasMore = true
+
+              while (hasMore) {
+                const { data: reviewsBatch, error: batchError } = await supabase
+                  .from(tableName)
+                  .select("*")
+                  .eq("reviewer_id", reviewerId)
+                  .order("created_at", { ascending: false })
+                  .range(page * pageSize, (page + 1) * pageSize - 1)
+
+                if (batchError) {
+                  // Table might not exist yet, skip it
+                  console.warn(`⚠️ Could not fetch from ${tableName}:`, batchError.message)
+                  hasMore = false
+                  break
+                }
+
+                if (!reviewsBatch || reviewsBatch.length === 0) {
+                  hasMore = false
+                  break
+                }
+
+                const mappedBatch = reviewsBatch.map((review: any) => ({
+                  ...review,
+                  source_table: sourceTable
+                })) as LanguageReview[]
+                
+                allReviews = [...allReviews, ...mappedBatch]
+                hasMore = reviewsBatch.length === pageSize
+                page++
+              }
+            }
+          } catch (tableError) {
+            // Table might not exist, continue with other tables
+            console.warn(`⚠️ Error querying ${tableName}:`, tableError)
+            continue
+          }
+        }
+
+        // Sort all reviews by created_at descending
+        allReviews.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+        
+        // Apply limit if specified (after combining all tables)
+        if (options?.limit && allReviews.length > options.limit) {
+          return allReviews.slice(0, options.limit)
+        }
+
+        return allReviews
+      }
     } catch (error) {
       console.error("Error in getReviewsByReviewer:", error)
       // CRITICAL: Don't return empty array on error - this would break duplicate prevention
@@ -1892,19 +2539,55 @@ class SupabaseDatabase {
     }
   }
 
-  async getReviewsByRecording(recordingId: string): Promise<Review[]> {
+  async getReviewsByRecording(recordingId: string, sourceTable?: string): Promise<LanguageReview[]> {
     try {
-      if (!recordingId || !isValidUUID(recordingId)) {
+      if (!recordingId) {
         return []
       }
 
-      const { data, error } = await supabase
-        .from("reviews")
+      let query = supabase
+        .from("language_reviews")
         .select("*")
         .eq("recording_id", recordingId)
         .order("created_at", { ascending: false })
 
+      // Optionally filter by source table
+      if (sourceTable) {
+        query = query.eq("source_table", sourceTable)
+      }
+
+      const { data, error } = await query
+
       if (error) {
+        // If language_reviews doesn't exist, fallback to luo_reviews
+        if ((error.message.includes("does not exist") || error.message.includes("schema cache"))) {
+          console.warn(`⚠️ language_reviews table not found, falling back to luo_reviews`)
+          
+          // Only fallback if sourceTable is luo or not specified
+          if (!sourceTable || sourceTable === "luo") {
+            const fallbackQuery = supabase
+              .from("luo_reviews")
+              .select("*")
+              .eq("recording_id", recordingId)
+              .order("created_at", { ascending: false })
+
+            const { data: fallbackData, error: fallbackError } = await fallbackQuery
+
+            if (fallbackError) {
+              console.error("Database error getting reviews by recording (fallback):", fallbackError)
+              return []
+            }
+
+            // Map luo_reviews to LanguageReview format
+            return (fallbackData || []).map((review: any) => ({
+              ...review,
+              source_table: "luo"
+            }))
+          } else {
+            // Requested a different source table but language_reviews doesn't exist
+            return []
+          }
+        }
         console.error("Database error getting reviews by recording:", error)
         throw new Error(`Failed to get reviews by recording: ${error.message}`)
       }
@@ -1916,15 +2599,21 @@ class SupabaseDatabase {
     }
   }
 
-  async getAllReviews(options?: { limit?: number }): Promise<Review[]> {
+  async getAllReviews(options?: { limit?: number; sourceTable?: string }): Promise<LanguageReview[]> {
     try {
       // If limit is specified, use it directly (for performance when only need a few records)
       if (options?.limit) {
-        const { data, error } = await supabase
-          .from("reviews")
+        let query = supabase
+          .from("language_reviews")
           .select("*")
           .order("created_at", { ascending: false })
           .limit(options.limit)
+
+        if (options?.sourceTable) {
+          query = query.eq("source_table", options.sourceTable)
+        }
+
+        const { data, error } = await query
 
         if (error) {
           console.error("Database error getting all reviews:", error)
@@ -1936,17 +2625,23 @@ class SupabaseDatabase {
 
       // FIXED: Use pagination to fetch ALL reviews (not limited to 1000 rows)
       console.log("🔄 Fetching all reviews with pagination...")
-      let allReviews: Review[] = []
+      let allReviews: LanguageReview[] = []
       let page = 0
       const pageSize = 1000
       let hasMore = true
 
       while (hasMore) {
-        const { data: reviewsBatch, error: batchError } = await supabase
-          .from("reviews")
+        let query = supabase
+          .from("language_reviews")
           .select("*")
           .order("created_at", { ascending: false })
           .range(page * pageSize, (page + 1) * pageSize - 1)
+
+        if (options?.sourceTable) {
+          query = query.eq("source_table", options.sourceTable)
+        }
+
+        const { data: reviewsBatch, error: batchError } = await query
 
         if (batchError) {
           console.error("Database error getting reviews batch:", batchError)
